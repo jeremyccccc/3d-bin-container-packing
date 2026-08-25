@@ -43,6 +43,7 @@
 		<owasp-dependency-check.version>5.3.2</owasp-dependency-check.version>
 		<pitest.version>1.25.5</pitest.version>
 		<jackson.version>2.22.0</jackson.version>
+		<spring-boot.version>3.5.9</spring-boot.version>
 		<spotless.version>3.7.0</spotless.version>
 	</properties>
 
@@ -229,6 +230,13 @@
 				<scope>import</scope>
 				<type>pom</type>
 			</dependency> 
+			<dependency>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-dependencies</artifactId>
+				<version>${spring-boot.version}</version>
+				<scope>import</scope>
+				<type>pom</type>
+			</dependency>
 		</dependencies>
 	</dependencyManagement>
 	<modules>
@@ -241,6 +249,7 @@
 		<module>visualizer/api</module>
 		<module>visualizer/algorithm</module>
 		<module>visualizer/packaging</module>
+		<module>packing-service</module>
 	</modules>
 
 	<build>
