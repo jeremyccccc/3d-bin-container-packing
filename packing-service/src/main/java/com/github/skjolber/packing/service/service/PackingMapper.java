@@ -14,6 +14,7 @@ import com.github.skjolber.packing.service.dto.ContainerDto;
 import com.github.skjolber.packing.service.dto.HouseBillDto;
 import com.github.skjolber.packing.service.dto.HouseBillItemDto;
 import com.github.skjolber.packing.service.dto.PackingRequest;
+import com.github.skjolber.packing.service.dto.PackingRuleDto;
 import com.github.skjolber.packing.service.dto.SizeDto;
 
 @Component
@@ -22,9 +23,11 @@ class PackingMapper {
 	static final String PROP_CARGO_ID = "cargoId";
 	static final String PROP_HOUSE_BS_ID = "houseBsId";
 	static final String PROP_INBOUND_ID = "inboundId";
+	static final String PROP_HEIGHT_POSITION = "heightPosition";
 
 	private static final int DIMENSION_SCALE = 10;
 	private static final int WEIGHT_SCALE = 1000;
+	private static final double QUANTITY_INTEGER_TOLERANCE = 1e-9;
 
 	PackingPlan toPlan(PackingRequest request) {
 		List<String> warnings = new ArrayList<>();
@@ -69,6 +72,7 @@ class PackingMapper {
 	private static List<CargoLine> toCargoLines(List<HouseBillDto> houseBills, List<String> warnings) {
 		List<CargoLine> lines = new ArrayList<>();
 		for (HouseBillDto houseBill : nullToEmpty(houseBills)) {
+			PackingRuleDto rule = validateRule(houseBill);
 			int itemIndex = 0;
 			for (HouseBillItemDto item : nullToEmpty(houseBill.items())) {
 				itemIndex++;
@@ -80,6 +84,7 @@ class PackingMapper {
 						cargoId,
 						houseBill.houseBsId(),
 						houseBill.desc(),
+						rule.heightPosition(),
 						item,
 						calculatedQuantity,
 						scaleCm(size.length()),
@@ -104,10 +109,32 @@ class PackingMapper {
 					.withProperty(PROP_CARGO_ID, line.cargoId())
 					.withProperty(PROP_HOUSE_BS_ID, line.houseBsId())
 					.withProperty(PROP_INBOUND_ID, line.item().inboundId())
+					.withProperty(PROP_HEIGHT_POSITION, line.heightPosition())
 					.build();
 			items.add(new BoxItem(box, line.calculatedQuantity()));
 		}
 		return items;
+	}
+
+	private static PackingRuleDto validateRule(HouseBillDto houseBill) {
+		PackingRuleDto rule = houseBill.rule() != null ? houseBill.rule() : PackingRuleDto.none();
+		String houseBsId = houseBill.houseBsId();
+		if (rule.heightPosition() < 0 || rule.heightPosition() > 2) {
+			throw new IllegalArgumentException("INVALID_HEIGHT_POSITION houseBsId=" + houseBsId + " value=" + rule.heightPosition());
+		}
+		if (rule.method() < 0 || rule.method() > 2) {
+			throw new IllegalArgumentException("INVALID_METHOD houseBsId=" + houseBsId + " value=" + rule.method());
+		}
+		if (rule.heightPosition() == 2) {
+			throw new IllegalArgumentException("UNSUPPORTED_RULE HeightPosition=2 houseBsId=" + houseBsId);
+		}
+		if (rule.doorSide()) {
+			throw new IllegalArgumentException("UNSUPPORTED_RULE DoorSide=true houseBsId=" + houseBsId);
+		}
+		if (rule.method() != 0) {
+			throw new IllegalArgumentException("UNSUPPORTED_RULE Method=" + rule.method() + " houseBsId=" + houseBsId);
+		}
+		return rule;
 	}
 
 	private static int calculateQuantity(HouseBillItemDto item, List<String> warnings, String houseBsId) {
@@ -120,8 +147,10 @@ class PackingMapper {
 			return Math.max(item.num(), 1);
 		}
 		double rawQuantity = item.meas() / unitMeas;
-		int quantity = Math.max((int) Math.ceil(rawQuantity), 1);
-		if (Math.abs(rawQuantity - Math.rint(rawQuantity)) > 1e-9) {
+		double nearestInteger = Math.rint(rawQuantity);
+		boolean isEffectivelyInteger = Math.abs(rawQuantity - nearestInteger) <= QUANTITY_INTEGER_TOLERANCE;
+		int quantity = Math.max((int) (isEffectivelyInteger ? nearestInteger : Math.ceil(rawQuantity)), 1);
+		if (!isEffectivelyInteger) {
 			warnings.add("MEAS_QUANTITY_ROUNDED_UP houseBsId=" + houseBsId + " inboundId=" + item.inboundId()
 					+ " calculated=" + rawQuantity + " rounded=" + quantity);
 		}

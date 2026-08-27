@@ -35,28 +35,35 @@ public class PackingService {
 		try {
 			PackingPlan plan = mapper.toPlan(request);
 			if (plan.containerItems().isEmpty()) {
-				return response(request, List.of());
+				return response(request, false, "NO_SUPPORTED_CONTAINER", plan.warnings(), emptyAllocations(plan.requestedContainers()));
 			}
 			if (plan.boxItems().isEmpty()) {
-				return response(request, emptyAllocations(plan.requestedContainers()));
+				return response(request, true, "OK", plan.warnings(), emptyAllocations(plan.requestedContainers()));
 			}
 
 			PackagerResult result = engine.pack(plan);
 			if (result == null || !result.isSuccess()) {
-				return response(request, emptyAllocations(plan.requestedContainers()));
+				return response(request, false, "PACKING_FAILED", plan.warnings(), emptyAllocations(plan.requestedContainers()));
 			}
 
-			return response(request, toAllocations(plan, result));
+			return response(request, true, "OK", plan.warnings(), toAllocations(plan, result));
 		} catch (Exception e) {
 			return new PackingResponse(
 					request != null ? request.masterBsId() : null,
+					false,
+					e.getMessage() != null ? e.getMessage() : "PACKING_ERROR",
+					List.of(),
 					request != null ? emptyAllocations(request.containerLists()) : List.of());
 		}
 	}
 
-	private static PackingResponse response(PackingRequest request, List<AllocatedContainerDto> containers) {
+	private static PackingResponse response(PackingRequest request, boolean success, String message,
+			List<String> warnings, List<AllocatedContainerDto> containers) {
 		return new PackingResponse(
 				request.masterBsId(),
+				success,
+				message,
+				warnings,
 				containers);
 	}
 

@@ -56,10 +56,10 @@ class PackingServiceTest {
 						"houseBsId": "136356901",
 						"desc": "衣帽架",
 						"rule": {
-							"CustomerMode": 2,
-							"HeightPosition": 2,
-							"DoorSide": true,
-							"Method": 2,
+							"CustomerMode": 0,
+							"HeightPosition": 0,
+							"DoorSide": false,
+							"Method": 0,
 							"FlatHeight": 10
 						},
 						"totalNum": 34,
@@ -82,6 +82,7 @@ class PackingServiceTest {
 
 		PackingResponse response = service.pack(request);
 
+		assertThat(response.success()).isTrue();
 		assertThat(response.masterBsId()).isEqualTo("136356701");
 		assertThat(response.containerLists()).hasSize(2);
 
@@ -96,5 +97,69 @@ class PackingServiceTest {
 				.mapToInt(item -> item.num())
 				.sum();
 		assertThat(returnedNum).isEqualTo(67);
+	}
+
+	@Test
+	void rejectsRulesThatAreNotImplementedYet() throws Exception {
+		PackingRequest request = requestWithRule(2, false, 0);
+
+		PackingResponse response = service.pack(request);
+
+		assertThat(response.success()).isFalse();
+		assertThat(response.message()).contains("UNSUPPORTED_RULE HeightPosition=2");
+	}
+
+	@Test
+	void rejectsInvalidRuleValues() throws Exception {
+		PackingRequest request = requestWithRule(3, false, 0);
+
+		PackingResponse response = service.pack(request);
+
+		assertThat(response.success()).isFalse();
+		assertThat(response.message()).contains("INVALID_HEIGHT_POSITION");
+	}
+
+	@Test
+	void packsHouseBillWithBottomRule() throws Exception {
+		PackingRequest request = requestWithRule(1, false, 0);
+
+		PackingResponse response = service.pack(request);
+
+		assertThat(response.success()).isTrue();
+		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
+	}
+
+	@Test
+	void rejectsDoorSideUntilItIsImplemented() throws Exception {
+		PackingResponse response = service.pack(requestWithRule(0, true, 0));
+
+		assertThat(response.success()).isFalse();
+		assertThat(response.message()).contains("UNSUPPORTED_RULE DoorSide=true");
+	}
+
+	@Test
+	void rejectsPackingMethodUntilItIsImplemented() throws Exception {
+		PackingResponse response = service.pack(requestWithRule(0, false, 1));
+
+		assertThat(response.success()).isFalse();
+		assertThat(response.message()).contains("UNSUPPORTED_RULE Method=1");
+	}
+
+	private PackingRequest requestWithRule(int heightPosition, boolean doorSide, int method) throws Exception {
+		return objectMapper.readValue("""
+				{
+				  "masterBsId": "M1",
+				  "containerLists": [{"id":"C1","size":40,"type":"HQ"}],
+				  "houseBillList": [{
+				    "houseBsId":"H1",
+				    "desc":"test",
+				    "rule":{"CustomerMode":0,"HeightPosition":%d,"DoorSide":%s,"Method":%d,"FlatHeight":null},
+				    "totalNum":1,"totalWeight":1,"totalMeas":0.001,
+				    "items":[{"inboundId":"I1","num":1,"weight":1,"meas":0.001,
+				      "size":{"length":10,"width":10,"height":10}}]
+				  }]
+				}
+				""".formatted(heightPosition, doorSide, method), PackingRequest.class);
 	}
 }
