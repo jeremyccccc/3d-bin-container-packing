@@ -10,13 +10,22 @@ final class BottomPlacementControlsBuilder extends PlainPlacementControlsBuilder
 
 	BottomPlacementControlsBuilder(Comparator<Placement> placementComparator,
 			Comparator<BoxItem> boxItemComparator, boolean requireFullSupport) {
-		super(placementComparator, boxItemComparator, requireFullSupport);
+		this(placementComparator, boxItemComparator, requireFullSupport, false);
 	}
+
+	BottomPlacementControlsBuilder(Comparator<Placement> placementComparator,
+			Comparator<BoxItem> boxItemComparator, boolean requireFullSupport, boolean preferDoorSidePlacements) {
+		super(placementComparator, boxItemComparator, requireFullSupport);
+		this.preferDoorSidePlacements = preferDoorSidePlacements;
+	}
+
+	private final boolean preferDoorSidePlacements;
 
 	@Override
 	public BottomPlacementControls build() {
 		return new BottomPlacementControls(boxItems, boxItemsStartIndex, boxItemsEndIndex,
 				pointControls, pointCalculator, container, stack, order,
-				plainPlacementComparator, boxItemComparator, requireFullSupport);
+				preferDoorSidePlacements ? new RulePlacementComparator(container) : plainPlacementComparator,
+				boxItemComparator, requireFullSupport);
 	}
 }

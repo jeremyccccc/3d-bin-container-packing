@@ -8,6 +8,7 @@ record CargoLine(
 		String desc,
 		int heightPosition,
 		boolean noPress,
+		boolean doorSide,
 		HouseBillItemDto item,
 		int calculatedQuantity,
 		int scaledLength,

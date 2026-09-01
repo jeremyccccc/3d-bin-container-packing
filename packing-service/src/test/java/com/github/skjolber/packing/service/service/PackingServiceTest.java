@@ -132,11 +132,12 @@ class PackingServiceTest {
 	}
 
 	@Test
-	void rejectsDoorSideUntilItIsImplemented() throws Exception {
+	void packsHouseBillWithDoorSideRule() throws Exception {
 		PackingResponse response = service.pack(requestWithRule(0, true, 0));
 
-		assertThat(response.success()).isFalse();
-		assertThat(response.message()).contains("UNSUPPORTED_RULE DoorSide=true");
+		assertThat(response.success()).isTrue();
+		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
 	}
 
 	@Test

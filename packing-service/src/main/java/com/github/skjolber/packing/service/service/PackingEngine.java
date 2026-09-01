@@ -33,11 +33,15 @@ class PackingEngine {
 		List<ContainerItem> containers = swapLengthWidth ? swappedContainers(plan.containerItems()) : plan.containerItems();
 		PackagerResult best = null;
 		if (hasBusinessRule(plan)) {
-			PlainPackager packager = PlainPackager.newBuilder()
+			boolean hasDoorSideRule = DoorSideRuleSupport.hasDoorSideRule(plan.boxItems());
+			best = better(best, tryPack(plan, containers, "Plain-Rules" + (swapLengthWidth ? "-SWAPPED" : ""), PlainPackager.newBuilder()
 					.withPlacementControlsBuilderFactory(() -> new BottomPlacementControlsBuilder(
-							new PlainPlacementComparator(), VolumeThenWeightBoxItemComparator.getInstance(), false))
-					.build();
-			return tryPack(plan, containers, "Plain-Rules" + (swapLengthWidth ? "-SWAPPED" : ""), packager);
+							new PlainPlacementComparator(),
+							hasDoorSideRule ? new RuleBoxItemComparator() : VolumeThenWeightBoxItemComparator.getInstance(),
+							false,
+							hasDoorSideRule))
+					.build()));
+			return best;
 		}
 		best = better(best, tryPack(plan, containers, "LAFF" + (swapLengthWidth ? "-SWAPPED" : ""), LargestAreaFitFirstPackager.newBuilder().build()));
 		best = better(best, tryPack(plan, containers, "FastLAFF" + (swapLengthWidth ? "-SWAPPED" : ""), FastLargestAreaFitFirstPackager.newBuilder().build()));
@@ -56,6 +60,11 @@ class PackingEngine {
 
 			System.out.println("packing-service " + label + " success=" + result.isSuccess() + " containerCount=" + result.size());
 			boolean valid = result.isSuccess() && BottomRuleSupport.isValid(result) && NoPressRuleSupport.isValid(result);
+			boolean hasDoorSideRule = DoorSideRuleSupport.hasDoorSideRule(plan.boxItems());
+			if (valid && hasDoorSideRule) {
+				DoorSideRuleSupport.mirrorToDoorSide(result);
+				valid = DoorSideRuleSupport.isValid(result);
+			}
 			return valid ? result : null;
 		} finally {
 			try {
@@ -68,7 +77,9 @@ class PackingEngine {
 
 	private static boolean hasBusinessRule(PackingPlan plan) {
 		return plan.boxItems().stream().anyMatch(item ->
-				BottomRuleSupport.hasBottomRule(item.getBox()) || NoPressRuleSupport.hasNoPressRule(item.getBox()));
+				BottomRuleSupport.hasBottomRule(item.getBox())
+						|| NoPressRuleSupport.hasNoPressRule(item.getBox())
+						|| DoorSideRuleSupport.hasDoorSideRule(item.getBox()));
 	}
 
 	private static List<ContainerItem> swappedContainers(List<ContainerItem> source) {
@@ -93,6 +104,10 @@ class PackingEngine {
 			return candidate;
 		}
 		if (candidate.size() == current.size() && totalLoadVolume(candidate) > totalLoadVolume(current)) {
+			return candidate;
+		}
+		if (candidate.size() == current.size() && totalLoadVolume(candidate) == totalLoadVolume(current)
+				&& DoorSideRuleSupport.score(candidate).isBetterThan(DoorSideRuleSupport.score(current))) {
 			return candidate;
 		}
 		return current;

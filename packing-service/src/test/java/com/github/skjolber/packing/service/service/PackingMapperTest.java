@@ -68,4 +68,34 @@ class PackingMapperTest {
 		assertThat(plan.boxItems()).hasSize(1);
 		assertThat(plan.boxItems().get(0).getBox().<Boolean>getProperty(PackingMapper.PROP_NO_PRESS)).isTrue();
 	}
+
+	@Test
+	void mapsDoorSideRule() throws Exception {
+		PackingRequest request = new ObjectMapper().readValue("""
+				{
+				  "masterBsId":"M1",
+				  "containerLists":[{"id":"C1","size":40,"type":"HQ"}],
+				  "houseBillList":[{
+				    "houseBsId":"H1",
+				    "desc":"door",
+				    "rule":{"CustomerMode":0,"HeightPosition":0,"DoorSide":true,"Method":0,"FlatHeight":null},
+				    "totalNum":1,
+				    "totalWeight":1,
+				    "totalMeas":0.001,
+				    "items":[{
+				      "inboundId":"I1",
+				      "num":1,
+				      "weight":1,
+				      "meas":0.001,
+				      "size":{"length":10,"width":10,"height":10}
+				    }]
+				  }]
+				}
+				""", PackingRequest.class);
+
+		PackingPlan plan = new PackingMapper().toPlan(request);
+
+		assertThat(plan.boxItems()).hasSize(1);
+		assertThat(plan.boxItems().get(0).getBox().<Boolean>getProperty(PackingMapper.PROP_DOOR_SIDE)).isTrue();
+	}
 }

@@ -25,6 +25,7 @@ class PackingMapper {
 	static final String PROP_INBOUND_ID = "inboundId";
 	static final String PROP_HEIGHT_POSITION = "heightPosition";
 	static final String PROP_NO_PRESS = "noPress";
+	static final String PROP_DOOR_SIDE = "doorSide";
 
 	private static final int DIMENSION_SCALE = 10;
 	private static final int WEIGHT_SCALE = 1000;
@@ -87,6 +88,7 @@ class PackingMapper {
 						houseBill.desc(),
 						rule.heightPosition(),
 						isNoPress(rule),
+						rule.doorSide(),
 						item,
 						calculatedQuantity,
 						scaleCm(size.length()),
@@ -113,6 +115,7 @@ class PackingMapper {
 					.withProperty(PROP_INBOUND_ID, line.item().inboundId())
 					.withProperty(PROP_HEIGHT_POSITION, line.heightPosition())
 					.withProperty(PROP_NO_PRESS, line.noPress())
+					.withProperty(PROP_DOOR_SIDE, line.doorSide())
 					.build();
 			items.add(new BoxItem(box, line.calculatedQuantity()));
 		}
@@ -127,9 +130,6 @@ class PackingMapper {
 		}
 		if (rule.method() < 0 || rule.method() > 2) {
 			throw new IllegalArgumentException("INVALID_METHOD houseBsId=" + houseBsId + " value=" + rule.method());
-		}
-		if (rule.doorSide()) {
-			throw new IllegalArgumentException("UNSUPPORTED_RULE DoorSide=true houseBsId=" + houseBsId);
 		}
 		if (rule.method() == 2) {
 			throw new IllegalArgumentException("UNSUPPORTED_RULE Method=2 houseBsId=" + houseBsId);
