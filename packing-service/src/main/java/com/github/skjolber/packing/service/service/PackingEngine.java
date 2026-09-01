@@ -32,12 +32,12 @@ class PackingEngine {
 	private static PackagerResult packOrientation(PackingPlan plan, boolean swapLengthWidth) {
 		List<ContainerItem> containers = swapLengthWidth ? swappedContainers(plan.containerItems()) : plan.containerItems();
 		PackagerResult best = null;
-		if (hasBottomRule(plan)) {
+		if (hasBusinessRule(plan)) {
 			PlainPackager packager = PlainPackager.newBuilder()
 					.withPlacementControlsBuilderFactory(() -> new BottomPlacementControlsBuilder(
 							new PlainPlacementComparator(), VolumeThenWeightBoxItemComparator.getInstance(), false))
 					.build();
-			return tryPack(plan, containers, "Plain-Bottom" + (swapLengthWidth ? "-SWAPPED" : ""), packager);
+			return tryPack(plan, containers, "Plain-Rules" + (swapLengthWidth ? "-SWAPPED" : ""), packager);
 		}
 		best = better(best, tryPack(plan, containers, "LAFF" + (swapLengthWidth ? "-SWAPPED" : ""), LargestAreaFitFirstPackager.newBuilder().build()));
 		best = better(best, tryPack(plan, containers, "FastLAFF" + (swapLengthWidth ? "-SWAPPED" : ""), FastLargestAreaFitFirstPackager.newBuilder().build()));
@@ -55,7 +55,7 @@ class PackingEngine {
 					.build();
 
 			System.out.println("packing-service " + label + " success=" + result.isSuccess() + " containerCount=" + result.size());
-			boolean valid = result.isSuccess() && BottomRuleSupport.isValid(result);
+			boolean valid = result.isSuccess() && BottomRuleSupport.isValid(result) && NoPressRuleSupport.isValid(result);
 			return valid ? result : null;
 		} finally {
 			try {
@@ -66,8 +66,9 @@ class PackingEngine {
 		}
 	}
 
-	private static boolean hasBottomRule(PackingPlan plan) {
-		return plan.boxItems().stream().anyMatch(item -> BottomRuleSupport.hasBottomRule(item.getBox()));
+	private static boolean hasBusinessRule(PackingPlan plan) {
+		return plan.boxItems().stream().anyMatch(item ->
+				BottomRuleSupport.hasBottomRule(item.getBox()) || NoPressRuleSupport.hasNoPressRule(item.getBox()));
 	}
 
 	private static List<ContainerItem> swappedContainers(List<ContainerItem> source) {

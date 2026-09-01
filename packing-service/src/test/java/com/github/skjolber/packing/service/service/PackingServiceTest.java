@@ -100,13 +100,14 @@ class PackingServiceTest {
 	}
 
 	@Test
-	void rejectsRulesThatAreNotImplementedYet() throws Exception {
+	void packsHeightPositionTopAsNoPressRule() throws Exception {
 		PackingRequest request = requestWithRule(2, false, 0);
 
 		PackingResponse response = service.pack(request);
 
-		assertThat(response.success()).isFalse();
-		assertThat(response.message()).contains("UNSUPPORTED_RULE HeightPosition=2");
+		assertThat(response.success()).isTrue();
+		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
 	}
 
 	@Test
@@ -139,11 +140,29 @@ class PackingServiceTest {
 	}
 
 	@Test
-	void rejectsPackingMethodUntilItIsImplemented() throws Exception {
+	void packsSelfStackNoPressAsNoPressRule() throws Exception {
 		PackingResponse response = service.pack(requestWithRule(0, false, 1));
 
+		assertThat(response.success()).isTrue();
+		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
+	}
+
+	@Test
+	void packsTopAndSelfStackNoPressTogetherAsOneRule() throws Exception {
+		PackingResponse response = service.pack(requestWithRule(2, false, 1));
+
+		assertThat(response.success()).isTrue();
+		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
+	}
+
+	@Test
+	void rejectsFlatUntilItIsDefined() throws Exception {
+		PackingResponse response = service.pack(requestWithRule(0, false, 2));
+
 		assertThat(response.success()).isFalse();
-		assertThat(response.message()).contains("UNSUPPORTED_RULE Method=1");
+		assertThat(response.message()).contains("UNSUPPORTED_RULE Method=2");
 	}
 
 	private PackingRequest requestWithRule(int heightPosition, boolean doorSide, int method) throws Exception {

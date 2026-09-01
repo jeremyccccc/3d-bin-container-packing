@@ -30,6 +30,9 @@ final class BottomPlacementControls extends PlainPlacementControls {
 		if (!BottomRuleSupport.isAllowed(point, stackValue, pointCalculator.getPlacements())) {
 			return null;
 		}
+		if (!NoPressRuleSupport.isAllowed(point, stackValue, pointCalculator.getPlacements())) {
+			return null;
+		}
 		return super.createPlacement(point, stackValue);
 	}
 }

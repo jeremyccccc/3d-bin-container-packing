@@ -7,6 +7,7 @@ record CargoLine(
 		String houseBsId,
 		String desc,
 		int heightPosition,
+		boolean noPress,
 		HouseBillItemDto item,
 		int calculatedQuantity,
 		int scaledLength,
