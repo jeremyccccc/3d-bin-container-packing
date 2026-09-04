@@ -6,6 +6,7 @@ record CargoLine(
 		String cargoId,
 		String houseBsId,
 		String desc,
+		String customer,
 		int heightPosition,
 		boolean noPress,
 		boolean doorSide,

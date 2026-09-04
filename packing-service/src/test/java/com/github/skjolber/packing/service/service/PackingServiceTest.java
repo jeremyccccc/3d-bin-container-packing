@@ -88,10 +88,10 @@ class PackingServiceTest {
 
 		AllocatedContainerDto gp = response.containerLists().get(0);
 		AllocatedContainerDto hq = response.containerLists().get(1);
-		assertThat(gp.allocatedHouseBillList()).isEmpty();
-		assertThat(hq.allocatedHouseBillList()).hasSize(2);
+		assertThat(gp.allocatedHouseBillList()).hasSize(2);
+		assertThat(hq.allocatedHouseBillList()).isEmpty();
 
-		int returnedNum = hq.allocatedHouseBillList()
+		int returnedNum = gp.allocatedHouseBillList()
 				.stream()
 				.flatMap(houseBill -> houseBill.items().stream())
 				.mapToInt(item -> item.num())
@@ -106,7 +106,7 @@ class PackingServiceTest {
 		PackingResponse response = service.pack(request);
 
 		assertThat(response.success()).isTrue();
-		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.message()).isEqualTo("装箱成功");
 		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
 	}
 
@@ -117,7 +117,7 @@ class PackingServiceTest {
 		PackingResponse response = service.pack(request);
 
 		assertThat(response.success()).isFalse();
-		assertThat(response.message()).contains("INVALID_HEIGHT_POSITION");
+		assertThat(response.message()).contains("装箱规则高度位置无效");
 	}
 
 	@Test
@@ -127,7 +127,7 @@ class PackingServiceTest {
 		PackingResponse response = service.pack(request);
 
 		assertThat(response.success()).isTrue();
-		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.message()).isEqualTo("装箱成功");
 		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
 	}
 
@@ -136,7 +136,7 @@ class PackingServiceTest {
 		PackingResponse response = service.pack(requestWithRule(0, true, 0));
 
 		assertThat(response.success()).isTrue();
-		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.message()).isEqualTo("装箱成功");
 		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
 	}
 
@@ -145,7 +145,7 @@ class PackingServiceTest {
 		PackingResponse response = service.pack(requestWithRule(0, false, 1));
 
 		assertThat(response.success()).isTrue();
-		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.message()).isEqualTo("装箱成功");
 		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
 	}
 
@@ -154,7 +154,7 @@ class PackingServiceTest {
 		PackingResponse response = service.pack(requestWithRule(2, false, 1));
 
 		assertThat(response.success()).isTrue();
-		assertThat(response.message()).isEqualTo("OK");
+		assertThat(response.message()).isEqualTo("装箱成功");
 		assertThat(response.containerLists().get(0).allocatedHouseBillList()).hasSize(1);
 	}
 
@@ -163,7 +163,7 @@ class PackingServiceTest {
 		PackingResponse response = service.pack(requestWithRule(0, false, 2));
 
 		assertThat(response.success()).isFalse();
-		assertThat(response.message()).contains("UNSUPPORTED_RULE Method=2");
+		assertThat(response.message()).contains("暂不支持平铺规则");
 	}
 
 	private PackingRequest requestWithRule(int heightPosition, boolean doorSide, int method) throws Exception {

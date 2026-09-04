@@ -3,6 +3,7 @@ package com.github.skjolber.packing.service.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
@@ -23,6 +24,7 @@ class PackingMapper {
 	static final String PROP_CARGO_ID = "cargoId";
 	static final String PROP_HOUSE_BS_ID = "houseBsId";
 	static final String PROP_INBOUND_ID = "inboundId";
+	static final String PROP_CUSTOMER = "customer";
 	static final String PROP_HEIGHT_POSITION = "heightPosition";
 	static final String PROP_NO_PRESS = "noPress";
 	static final String PROP_DOOR_SIDE = "doorSide";
@@ -30,6 +32,11 @@ class PackingMapper {
 	private static final int DIMENSION_SCALE = 10;
 	private static final int WEIGHT_SCALE = 1000;
 	private static final double QUANTITY_INTEGER_TOLERANCE = 1e-9;
+	private static final Map<String, ContainerSpec> CONTAINER_SPECS = Map.of(
+			"20GP", new ContainerSpec(589.8, 235.2, 239.3, 28220),
+			"40GP", new ContainerSpec(1203.2, 235.2, 239.3, 26780),
+			"40HQ", new ContainerSpec(1203.2, 235.2, 269.8, 26600),
+			"45HQ", new ContainerSpec(1356.0, 235.2, 269.8, 27600));
 
 	PackingPlan toPlan(PackingRequest request) {
 		List<String> warnings = new ArrayList<>();
@@ -48,27 +55,31 @@ class PackingMapper {
 	private static List<ContainerItem> toContainerItems(List<ContainerDto> input, List<String> warnings) {
 		List<ContainerItem> items = new ArrayList<>();
 		for (ContainerDto container : nullToEmpty(input)) {
-			if (!isSupported40Hq(container)) {
+			ContainerSpec spec = spec(container);
+			if (spec == null) {
 				warnings.add("UNSUPPORTED_CONTAINER_SKIPPED id=" + container.id() + " size=" + container.size() + " type=" + container.type());
 				continue;
 			}
 
-			Container fortyHq = Container
+			Container mapped = Container
 					.newBuilder()
 					.withId(container.id())
 					.withDescription(container.size() + container.type().toUpperCase(Locale.ROOT))
-					.withSize(scaleCm(1203.2), scaleCm(235.2), scaleCm(269.8))
+					.withSize(scaleCm(spec.lengthCm()), scaleCm(spec.widthCm()), scaleCm(spec.heightCm()))
 					.withEmptyWeight(0)
-					.withMaxLoadWeight(26600 * WEIGHT_SCALE)
+					.withMaxLoadWeight(spec.maxLoadKg() * WEIGHT_SCALE)
 					.build();
 
-			items.add(new ContainerItem(fortyHq, 1));
+			items.add(new ContainerItem(mapped, 1));
 		}
 		return items;
 	}
 
-	private static boolean isSupported40Hq(ContainerDto container) {
-		return container != null && container.size() == 40 && container.type() != null && "HQ".equalsIgnoreCase(container.type());
+	private static ContainerSpec spec(ContainerDto container) {
+		if (container == null || container.type() == null) {
+			return null;
+		}
+		return CONTAINER_SPECS.get(container.size() + container.type().toUpperCase(Locale.ROOT));
 	}
 
 	private static List<CargoLine> toCargoLines(List<HouseBillDto> houseBills, List<String> warnings) {
@@ -86,6 +97,7 @@ class PackingMapper {
 						cargoId,
 						houseBill.houseBsId(),
 						houseBill.desc(),
+						houseBill.customer(),
 						rule.heightPosition(),
 						isNoPress(rule),
 						rule.doorSide(),
@@ -113,6 +125,7 @@ class PackingMapper {
 					.withProperty(PROP_CARGO_ID, line.cargoId())
 					.withProperty(PROP_HOUSE_BS_ID, line.houseBsId())
 					.withProperty(PROP_INBOUND_ID, line.item().inboundId())
+					.withProperty(PROP_CUSTOMER, line.customer())
 					.withProperty(PROP_HEIGHT_POSITION, line.heightPosition())
 					.withProperty(PROP_NO_PRESS, line.noPress())
 					.withProperty(PROP_DOOR_SIDE, line.doorSide())
@@ -126,16 +139,16 @@ class PackingMapper {
 		PackingRuleDto rule = houseBill.rule() != null ? houseBill.rule() : PackingRuleDto.none();
 		String houseBsId = houseBill.houseBsId();
 		if (rule.heightPosition() < 0 || rule.heightPosition() > 2) {
-			throw new IllegalArgumentException("INVALID_HEIGHT_POSITION houseBsId=" + houseBsId + " value=" + rule.heightPosition());
+			throw new IllegalArgumentException("装箱规则高度位置无效，houseBsId=" + houseBsId + "，值=" + rule.heightPosition());
 		}
 		if (rule.method() < 0 || rule.method() > 2) {
-			throw new IllegalArgumentException("INVALID_METHOD houseBsId=" + houseBsId + " value=" + rule.method());
+			throw new IllegalArgumentException("装箱规则方法无效，houseBsId=" + houseBsId + "，值=" + rule.method());
 		}
 		if (rule.method() == 2) {
-			throw new IllegalArgumentException("UNSUPPORTED_RULE Method=2 houseBsId=" + houseBsId);
+			throw new IllegalArgumentException("暂不支持平铺规则，Method=2，houseBsId=" + houseBsId);
 		}
 		if (rule.method() != 0 && rule.method() != 1) {
-			throw new IllegalArgumentException("UNSUPPORTED_RULE Method=" + rule.method() + " houseBsId=" + houseBsId);
+			throw new IllegalArgumentException("暂不支持该装箱规则，Method=" + rule.method() + "，houseBsId=" + houseBsId);
 		}
 		return rule;
 	}
@@ -147,7 +160,7 @@ class PackingMapper {
 	private static int calculateQuantity(HouseBillItemDto item, List<String> warnings, String houseBsId) {
 		SizeDto size = item.size();
 		if (size == null || size.length() <= 0 || size.width() <= 0 || size.height() <= 0) {
-			throw new IllegalArgumentException("Invalid item size for inboundId=" + item.inboundId());
+			throw new IllegalArgumentException("货物尺寸无效，inboundId=" + item.inboundId());
 		}
 		double unitMeas = size.length() * size.width() * size.height() / 1_000_000.0;
 		if (unitMeas <= 0 || item.meas() <= 0) {
@@ -170,5 +183,8 @@ class PackingMapper {
 
 	private static <T> List<T> nullToEmpty(List<T> values) {
 		return values == null ? List.of() : values;
+	}
+
+	private record ContainerSpec(double lengthCm, double widthCm, double heightCm, int maxLoadKg) {
 	}
 }

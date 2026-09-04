@@ -35,23 +35,23 @@ public class PackingService {
 		try {
 			PackingPlan plan = mapper.toPlan(request);
 			if (plan.containerItems().isEmpty()) {
-				return response(request, false, "NO_SUPPORTED_CONTAINER", plan.warnings(), emptyAllocations(plan.requestedContainers()));
+				return response(request, false, "没有支持的柜型", plan.warnings(), emptyAllocations(plan.requestedContainers()));
 			}
 			if (plan.boxItems().isEmpty()) {
-				return response(request, true, "OK", plan.warnings(), emptyAllocations(plan.requestedContainers()));
+				return response(request, true, "装箱成功", plan.warnings(), emptyAllocations(plan.requestedContainers()));
 			}
 
 			PackagerResult result = engine.pack(plan);
 			if (result == null || !result.isSuccess()) {
-				return response(request, false, "PACKING_FAILED", plan.warnings(), emptyAllocations(plan.requestedContainers()));
+				return response(request, false, "装箱失败", plan.warnings(), emptyAllocations(plan.requestedContainers()));
 			}
 
-			return response(request, true, "OK", plan.warnings(), toAllocations(plan, result));
+			return response(request, true, "装箱成功", plan.warnings(), toAllocations(plan, result));
 		} catch (Exception e) {
 			return new PackingResponse(
 					request != null ? request.masterBsId() : null,
 					false,
-					e.getMessage() != null ? e.getMessage() : "PACKING_ERROR",
+					e.getMessage() != null ? e.getMessage() : "装箱异常",
 					List.of(),
 					request != null ? emptyAllocations(request.containerLists()) : List.of());
 		}
