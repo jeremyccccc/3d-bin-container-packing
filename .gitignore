@@ -89,3 +89,17 @@ release.properties
 apm_modules/
 
 .agents
+
+# Local packing-service runtime and test artifacts
+/packing-results/
+/packing-request-logs/
+/test-runs/
+*.log
+
+# Locally generated packing screenshots
+/viewer-containers-3d.png
+/visualizer/viewer/MASTER-*.png
+
+# Local TLS certificates and Firecrawl scratch data
+*.p12
+/.firecrawl/

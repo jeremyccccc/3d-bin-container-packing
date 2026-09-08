@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.github.skjolber.packing.api.Container;
@@ -25,46 +26,75 @@ public class PackingService {
 
 	private final PackingMapper mapper;
 	private final PackingEngine engine;
+	private final PackingVisualizationStore visualizationStore;
+
+	@Autowired
+	public PackingService(PackingMapper mapper, PackingEngine engine, PackingVisualizationStore visualizationStore) {
+		this.mapper = mapper;
+		this.engine = engine;
+		this.visualizationStore = visualizationStore;
+	}
 
 	public PackingService(PackingMapper mapper, PackingEngine engine) {
 		this.mapper = mapper;
 		this.engine = engine;
+		this.visualizationStore = PackingVisualizationStore.disabled();
 	}
 
 	public PackingResponse pack(PackingRequest request) {
+		return pack(request, "");
+	}
+
+	public PackingResponse pack(PackingRequest request, String viewerBaseUrl) {
 		try {
 			PackingPlan plan = mapper.toPlan(request);
 			if (plan.containerItems().isEmpty()) {
-				return response(request, false, "没有支持的柜型", plan.warnings(), emptyAllocations(plan.requestedContainers()));
+				return response(request, false, "没有支持的柜型", plan.warnings(), null, null, emptyAllocations(plan.requestedContainers()));
 			}
 			if (plan.boxItems().isEmpty()) {
-				return response(request, true, "装箱成功", plan.warnings(), emptyAllocations(plan.requestedContainers()));
+				return response(request, true, "装箱成功", plan.warnings(), null, null, emptyAllocations(plan.requestedContainers()));
 			}
 
 			PackagerResult result = engine.pack(plan);
 			if (result == null || !result.isSuccess()) {
-				return response(request, false, "装箱失败", plan.warnings(), emptyAllocations(plan.requestedContainers()));
+				return response(request, false, "装箱失败", plan.warnings(), null, null, emptyAllocations(plan.requestedContainers()));
 			}
 
-			return response(request, true, "装箱成功", plan.warnings(), toAllocations(plan, result));
+			String resultId = visualizationStore.newResultId();
+			String viewerUrl = viewerUrl(viewerBaseUrl, resultId);
+			PackingResponse response = response(request, true, "装箱成功", plan.warnings(), resultId, viewerUrl, toAllocations(plan, result));
+			visualizationStore.save(resultId, request, response, result);
+			return response;
 		} catch (Exception e) {
 			return new PackingResponse(
 					request != null ? request.masterBsId() : null,
 					false,
 					e.getMessage() != null ? e.getMessage() : "装箱异常",
 					List.of(),
+					null,
+					null,
 					request != null ? emptyAllocations(request.containerLists()) : List.of());
 		}
 	}
 
 	private static PackingResponse response(PackingRequest request, boolean success, String message,
-			List<String> warnings, List<AllocatedContainerDto> containers) {
+			List<String> warnings, String resultId, String viewerUrl, List<AllocatedContainerDto> containers) {
 		return new PackingResponse(
 				request.masterBsId(),
 				success,
 				message,
 				warnings,
+				resultId,
+				viewerUrl,
 				containers);
+	}
+
+	private static String viewerUrl(String viewerBaseUrl, String resultId) {
+		String path = "/packing-viewer/" + resultId;
+		if (viewerBaseUrl == null || viewerBaseUrl.isBlank()) {
+			return path;
+		}
+		return viewerBaseUrl.replaceAll("/+$", "") + path;
 	}
 
 	private static List<AllocatedContainerDto> toAllocations(PackingPlan plan, PackagerResult result) {
