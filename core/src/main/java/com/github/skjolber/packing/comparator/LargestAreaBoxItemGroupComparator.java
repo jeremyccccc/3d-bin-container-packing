@@ -22,17 +22,17 @@ public class LargestAreaBoxItemGroupComparator implements Comparator<BoxItemGrou
 		BoxItem o1Area = getMaximumArea(o1);
 		BoxItem o2Area = getMaximumArea(o2);
 
-		int compare = Long.compare(o1Area.getBox().getMaximumArea(), o2Area.getBox().getMaximumArea());
+		int compare = Long.compare(o2Area.getBox().getMaximumArea(), o1Area.getBox().getMaximumArea());
 		if(compare != 0) {
 			return compare;
 		}
 
-		compare = Long.compare(o1Area.getBox().getVolume(), o2Area.getBox().getVolume());
+		compare = Long.compare(o2Area.getBox().getVolume(), o1Area.getBox().getVolume());
 		if(compare != 0) {
 			return compare;
 		}
 
-		compare = Long.compare(o1Area.getBox().getWeight(), o2Area.getBox().getWeight());
+		compare = Long.compare(o2Area.getBox().getWeight(), o1Area.getBox().getWeight());
 		if(compare != 0) {
 			return compare;
 		}

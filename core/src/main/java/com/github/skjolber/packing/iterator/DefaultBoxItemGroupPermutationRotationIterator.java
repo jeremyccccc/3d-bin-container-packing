@@ -70,13 +70,14 @@ public class DefaultBoxItemGroupPermutationRotationIterator extends AbstractBoxI
 		}
 
 		public boolean fitsInside(BoxItemGroup boxItemGroup) {
-			if(boxItemGroup.getVolume() <= volume && boxItemGroup.getWeight() <= maxLoadWeight) {			
-				for(int i = 0; i < boxItemGroup.size(); i++) {
-					Box box = boxItemGroup.get(i).getBox();
-					if(!box.fitsInside(dx, dy, dz)) {
-						return false;
-					}
-				}		
+			if(boxItemGroup.getVolume() > volume || boxItemGroup.getWeight() > maxLoadWeight) {
+				return false;
+			}
+			for(int i = 0; i < boxItemGroup.size(); i++) {
+				Box box = boxItemGroup.get(i).getBox();
+				if(!box.fitsInside(dx, dy, dz)) {
+					return false;
+				}
 			}
 			return true;
 		}

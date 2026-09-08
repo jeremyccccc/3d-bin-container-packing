@@ -169,9 +169,9 @@ class PackingMapper {
 		double rawQuantity = item.meas() / unitMeas;
 		double nearestInteger = Math.rint(rawQuantity);
 		boolean isEffectivelyInteger = Math.abs(rawQuantity - nearestInteger) <= QUANTITY_INTEGER_TOLERANCE;
-		int quantity = Math.max((int) (isEffectivelyInteger ? nearestInteger : Math.ceil(rawQuantity)), 1);
+		int quantity = Math.max((int) Math.round(rawQuantity), 1);
 		if (!isEffectivelyInteger) {
-			warnings.add("MEAS_QUANTITY_ROUNDED_UP houseBsId=" + houseBsId + " inboundId=" + item.inboundId()
+			warnings.add("MEAS_QUANTITY_ROUNDED houseBsId=" + houseBsId + " inboundId=" + item.inboundId()
 					+ " calculated=" + rawQuantity + " rounded=" + quantity);
 		}
 		return quantity;

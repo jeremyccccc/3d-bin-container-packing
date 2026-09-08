@@ -19,8 +19,8 @@ public class VolumeThenWeightBoxItemGroupComparator implements Comparator<BoxIte
 		// ****************************************
 
 		if(referenceBoxItemGroup.getVolume() == potentiallyBetterBoxItemGroup.getVolume()) {
-			return Long.compare(referenceBoxItemGroup.getWeight(), potentiallyBetterBoxItemGroup.getWeight());
+			return Long.compare(potentiallyBetterBoxItemGroup.getWeight(), referenceBoxItemGroup.getWeight());
 		}
-		return Long.compare(referenceBoxItemGroup.getVolume(), potentiallyBetterBoxItemGroup.getVolume());
+		return Long.compare(potentiallyBetterBoxItemGroup.getVolume(), referenceBoxItemGroup.getVolume());
 	}
 }

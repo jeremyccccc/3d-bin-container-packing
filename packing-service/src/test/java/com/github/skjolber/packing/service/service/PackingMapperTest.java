@@ -10,7 +10,7 @@ import com.github.skjolber.packing.service.dto.PackingRequest;
 class PackingMapperTest {
 
 	@Test
-	void doesNotRoundExactQuantityUpBecauseOfFloatingPointNoise() throws Exception {
+	void doesNotRoundExactQuantityBecauseOfFloatingPointNoise() throws Exception {
 		PackingRequest request = new ObjectMapper().readValue("""
 				{
 				  "masterBsId":"M1",
@@ -37,6 +37,38 @@ class PackingMapperTest {
 		assertThat(plan.boxItems()).hasSize(1);
 		assertThat(plan.boxItems().get(0).getCount()).isEqualTo(3);
 		assertThat(plan.warnings()).isEmpty();
+	}
+
+	@Test
+	void roundsMeasuredQuantityToNearestWholeBox() throws Exception {
+		PackingRequest request = new ObjectMapper().readValue("""
+				{
+				  "masterBsId":"M1",
+				  "containerLists":[{"id":"C1","size":40,"type":"HQ"}],
+				  "houseBillList":[{
+				    "houseBsId":"H1",
+				    "desc":"cargo",
+				    "totalNum":2,
+				    "totalWeight":0,
+				    "totalMeas":0.0020010853344186676,
+				    "items":[{
+				      "inboundId":"I1",
+				      "num":2,
+				      "weight":0,
+				      "meas":0.0020010853344186676,
+				      "size":{"length":10,"width":10,"height":10}
+				    }]
+				  }]
+				}
+				""", PackingRequest.class);
+
+		PackingPlan plan = new PackingMapper().toPlan(request);
+
+		assertThat(plan.boxItems()).hasSize(1);
+		assertThat(plan.boxItems().get(0).getCount()).isEqualTo(2);
+		assertThat(plan.warnings()).singleElement().asString().contains(
+				"MEAS_QUANTITY_ROUNDED houseBsId=H1 inboundId=I1",
+				"rounded=2");
 	}
 
 	@Test

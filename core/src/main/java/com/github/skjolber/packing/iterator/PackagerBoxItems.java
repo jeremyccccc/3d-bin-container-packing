@@ -151,7 +151,7 @@ public class PackagerBoxItems {
 	public int getFirstBoxItemIndexForGroup(int groupIndex) {
 		int index = 0;
 		for(int i = 0; i < groupIndex; i++) {
-			index += groups.get(index).size();
+			index += groups.get(i).size();
 		}
 		return index;
 	}

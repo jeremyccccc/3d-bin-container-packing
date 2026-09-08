@@ -7,5 +7,7 @@ public record PackingResponse(
 		boolean success,
 		String message,
 		List<String> warnings,
+		String resultId,
+		String viewerUrl,
 		List<AllocatedContainerDto> containerLists) {
 }

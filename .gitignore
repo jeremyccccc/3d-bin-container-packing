@@ -89,3 +89,14 @@ release.properties
 apm_modules/
 
 .agents
+
+# Local packing-service runtime output and test artifacts
+packing-results/
+packing-request-logs/
+test-runs/
+packing-service-local-*.log
+packing-service/src/main/resources/packing-service-local.p12
+
+# Locally generated visualization screenshots
+viewer-containers-3d.png
+visualizer/viewer/*.png

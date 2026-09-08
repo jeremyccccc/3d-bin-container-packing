@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<title>Packing 3D Viewer</title>
+	<style>
+		* { box-sizing: border-box; }
+		html, body { width: 100%; height: 100%; margin: 0; background: #101418; color: #eef3f8; font-family: Arial, "Microsoft YaHei", sans-serif; overflow: hidden; }
+		#viewer { width: 100vw; height: 100vh; display: block; cursor: grab; }
+		#viewer:active { cursor: grabbing; }
+		.panel { position: fixed; left: 16px; top: 16px; min-width: 260px; max-width: min(420px, calc(100vw - 32px)); padding: 12px 14px; background: rgba(16, 20, 24, 0.78); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; backdrop-filter: blur(8px); box-shadow: 0 12px 32px rgba(0,0,0,0.28); }
+		.title { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+		.meta { font-size: 12px; line-height: 1.6; color: #c9d4df; }
+		.error { color: #ffb4a9; }
+		.badge { display: inline-block; margin: 7px 6px 0 0; padding: 3px 7px; border-radius: 999px; background: rgba(255,255,255,0.12); color: #dce7f2; font-size: 11px; }
+	</style>
+</head>
+<body>
+	<canvas id="viewer"></canvas>
+	<div class="panel">
+		<div class="title">Packing 3D Viewer</div>
+		<div id="status" class="meta">加载中...</div>
+		<div id="legend"></div>
+	</div>
+	<script>
+		const canvas = document.getElementById("viewer");
+		const ctx = canvas.getContext("2d");
+		const statusEl = document.getElementById("status");
+		const legendEl = document.getElementById("legend");
+		const state = { yaw: -0.72, pitch: 0.54, zoom: 1, dragging: false, lastX: 0, lastY: 0, data: null };
+
+		function resultIdFromPath() {
+			const match = window.location.pathname.match(/\/packing-viewer\/([^/?#]+)/);
+			return match ? decodeURIComponent(match[1]) : "";
+		}
+
+		function colorFor(text) {
+			let hash = 0;
+			for (let i = 0; i < text.length; i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+			const hue = Math.abs(hash) % 360;
+			return `hsl(${hue}, 64%, 56%)`;
+		}
+
+		function resize() {
+			const dpr = window.devicePixelRatio || 1;
+			canvas.width = Math.floor(window.innerWidth * dpr);
+			canvas.height = Math.floor(window.innerHeight * dpr);
+			canvas.style.width = window.innerWidth + "px";
+			canvas.style.height = window.innerHeight + "px";
+			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+			draw();
+		}
+
+		function rotate(point) {
+			const cy = Math.cos(state.yaw), sy = Math.sin(state.yaw);
+			const cp = Math.cos(state.pitch), sp = Math.sin(state.pitch);
+			const x1 = point.x * cy - point.z * sy;
+			const z1 = point.x * sy + point.z * cy;
+			const y1 = point.y * cp - z1 * sp;
+			const z2 = point.y * sp + z1 * cp;
+			return { x: x1, y: y1, z: z2 };
+		}
+
+		function project(point, bounds) {
+			const centered = {
+				x: point.y - bounds.cy,
+				y: point.z - bounds.cz,
+				z: point.x - bounds.cx
+			};
+			const rotated = rotate(centered);
+			const scale = bounds.scale * state.zoom;
+			return {
+				x: window.innerWidth / 2 + rotated.x * scale,
+				y: window.innerHeight / 2 - rotated.y * scale,
+				z: rotated.z
+			};
+		}
+
+		function cuboidFaces(x, y, z, dx, dy, dz, bounds) {
+			const p = [
+				project({x, y, z}, bounds),
+				project({x: x + dx, y, z}, bounds),
+				project({x: x + dx, y: y + dy, z}, bounds),
+				project({x, y: y + dy, z}, bounds),
+				project({x, y, z: z + dz}, bounds),
+				project({x: x + dx, y, z: z + dz}, bounds),
+				project({x: x + dx, y: y + dy, z: z + dz}, bounds),
+				project({x, y: y + dy, z: z + dz}, bounds)
+			];
+			return [
+				[p[0], p[1], p[2], p[3]],
+				[p[4], p[7], p[6], p[5]],
+				[p[0], p[4], p[5], p[1]],
+				[p[1], p[5], p[6], p[2]],
+				[p[2], p[6], p[7], p[3]],
+				[p[3], p[7], p[4], p[0]]
+			];
+		}
+
+		function faceDepth(face) {
+			return face.reduce((sum, point) => sum + point.z, 0) / face.length;
+		}
+
+		function drawFace(face, fill, stroke, alpha) {
+			ctx.beginPath();
+			ctx.moveTo(face[0].x, face[0].y);
+			for (let i = 1; i < face.length; i++) ctx.lineTo(face[i].x, face[i].y);
+			ctx.closePath();
+			ctx.globalAlpha = alpha;
+			ctx.fillStyle = fill;
+			ctx.fill();
+			ctx.globalAlpha = 0.42;
+			ctx.strokeStyle = stroke;
+			ctx.lineWidth = 0.8;
+			ctx.stroke();
+			ctx.globalAlpha = 1;
+		}
+
+		function boundsFor(data) {
+			let maxX = 0, maxY = 0, maxZ = 0;
+			for (const container of data.containers || []) {
+				maxX += container.dx;
+				maxY = Math.max(maxY, container.dy);
+				maxZ = Math.max(maxZ, container.dz);
+			}
+			const maxDim = Math.max(maxX, maxY, maxZ, 1);
+			return {
+				cx: maxX / 2,
+				cy: maxY / 2,
+				cz: maxZ / 2,
+				scale: Math.min(window.innerWidth, window.innerHeight) / maxDim * 0.82
+			};
+		}
+
+		function draw() {
+			ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+			ctx.fillStyle = "#101418";
+			ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+			if (!state.data) return;
+
+			const bounds = boundsFor(state.data);
+			const faces = [];
+			let offsetX = 0;
+			for (const container of state.data.containers || []) {
+				for (const face of cuboidFaces(offsetX, 0, 0, container.dx, container.dy, container.dz, bounds)) {
+					faces.push({ face, fill: "rgba(255,255,255,0.04)", stroke: "rgba(255,255,255,0.7)", alpha: 1 });
+				}
+				for (const placement of container.stack?.placements || []) {
+					const stackable = placement.stackable;
+					const house = placement.houseBsId || (stackable.name || "").split(" ")[0] || stackable.id || "cargo";
+					for (const face of cuboidFaces(offsetX + placement.x, placement.y, placement.z, stackable.dx, stackable.dy, stackable.dz, bounds)) {
+						faces.push({ face, fill: colorFor(house), stroke: "rgba(0,0,0,0.72)", alpha: 0.68 });
+					}
+				}
+				offsetX += container.dx + 100;
+			}
+			faces.sort((a, b) => faceDepth(a.face) - faceDepth(b.face));
+			for (const item of faces) drawFace(item.face, item.fill, item.stroke, item.alpha);
+		}
+
+		async function load() {
+			const resultId = resultIdFromPath();
+			if (!resultId) {
+				statusEl.innerHTML = "<span class='error'>URL 缺少 resultId</span>";
+				return;
+			}
+			const response = await fetch(`/api/packing/results/${encodeURIComponent(resultId)}/visualization`);
+			if (!response.ok) throw new Error(`HTTP ${response.status}`);
+			state.data = await response.json();
+			const containers = state.data.containers || [];
+			const placements = containers.reduce((sum, container) => sum + (container.stack?.placements?.length || 0), 0);
+			statusEl.textContent = `${resultId} | ${containers.length} 柜 | ${placements} 件`;
+			const houses = new Set();
+			for (const container of containers) {
+				for (const placement of container.stack?.placements || []) {
+					houses.add(placement.houseBsId || (placement.stackable.name || "").split(" ")[0]);
+				}
+			}
+			legendEl.innerHTML = Array.from(houses).sort().map(house => `<span class="badge" style="border-left:10px solid ${colorFor(house)}">${house}</span>`).join("");
+			draw();
+		}
+
+		canvas.addEventListener("mousedown", event => {
+			state.dragging = true;
+			state.lastX = event.clientX;
+			state.lastY = event.clientY;
+		});
+		window.addEventListener("mouseup", () => state.dragging = false);
+		window.addEventListener("mousemove", event => {
+			if (!state.dragging) return;
+			state.yaw += (event.clientX - state.lastX) * 0.008;
+			state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch + (event.clientY - state.lastY) * 0.008));
+			state.lastX = event.clientX;
+			state.lastY = event.clientY;
+			draw();
+		});
+		canvas.addEventListener("wheel", event => {
+			event.preventDefault();
+			state.zoom = Math.max(0.2, Math.min(5, state.zoom * (event.deltaY > 0 ? 0.9 : 1.1)));
+			draw();
+		}, { passive: false });
+		window.addEventListener("resize", resize);
+
+		resize();
+		load().catch(error => {
+			statusEl.innerHTML = `<span class="error">加载失败：${error.message}</span>`;
+		});
+	</script>
+</body>
+</html>
