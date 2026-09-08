@@ -8,12 +8,18 @@
 		* { box-sizing: border-box; }
 		html, body { width: 100%; height: 100%; margin: 0; background: #101418; color: #eef3f8; font-family: Arial, "Microsoft YaHei", sans-serif; overflow: hidden; }
 		#viewer { width: 100vw; height: 100vh; display: block; cursor: grab; }
-		#viewer:active { cursor: grabbing; }
-		.panel { position: fixed; left: 16px; top: 16px; min-width: 260px; max-width: min(420px, calc(100vw - 32px)); padding: 12px 14px; background: rgba(16, 20, 24, 0.78); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; backdrop-filter: blur(8px); box-shadow: 0 12px 32px rgba(0,0,0,0.28); }
+		#viewer.dragging { cursor: grabbing; }
+		.panel { position: fixed; left: 16px; top: 16px; width: 280px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto; padding: 12px 14px; background: rgba(16, 20, 24, 0.82); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; backdrop-filter: blur(8px); box-shadow: 0 12px 32px rgba(0,0,0,0.28); }
 		.title { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
 		.meta { font-size: 12px; line-height: 1.6; color: #c9d4df; }
 		.error { color: #ffb4a9; }
 		.badge { display: inline-block; margin: 7px 6px 0 0; padding: 3px 7px; border-radius: 999px; background: rgba(255,255,255,0.12); color: #dce7f2; font-size: 11px; }
+		.section-title { margin-top: 12px; margin-bottom: 6px; color: #8fa4b8; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+		.container-list { display: grid; gap: 6px; }
+		.container-button { width: 100%; padding: 8px 10px; color: #dce7f2; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; text-align: left; cursor: pointer; }
+		.container-button:hover { background: rgba(255,255,255,0.12); }
+		.container-button.active { color: #fff; background: #1769aa; border-color: #4aa3df; }
+		.help { margin-top: 12px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,0.1); }
 	</style>
 </head>
 <body>
@@ -21,14 +27,20 @@
 	<div class="panel">
 		<div class="title">Packing 3D Viewer</div>
 		<div id="status" class="meta">加载中...</div>
+		<div class="section-title">选择柜子</div>
+		<div id="containerList" class="container-list"></div>
+		<div id="selection" class="meta"></div>
 		<div id="legend"></div>
+		<div class="meta help">左键拖动：旋转视角<br>右键拖动：平移柜子<br>滚轮：缩放</div>
 	</div>
 	<script>
 		const canvas = document.getElementById("viewer");
 		const ctx = canvas.getContext("2d");
 		const statusEl = document.getElementById("status");
+		const containerListEl = document.getElementById("containerList");
+		const selectionEl = document.getElementById("selection");
 		const legendEl = document.getElementById("legend");
-		const state = { yaw: -0.72, pitch: 0.54, zoom: 1, dragging: false, lastX: 0, lastY: 0, data: null };
+		const state = { yaw: -0.72, pitch: 0.54, zoom: 1, panX: 0, panY: 0, dragMode: null, lastX: 0, lastY: 0, selectedIndex: 0, data: null };
 
 		function resultIdFromPath() {
 			const match = window.location.pathname.match(/\/packing-viewer\/([^/?#]+)/);
@@ -71,8 +83,8 @@
 			const rotated = rotate(centered);
 			const scale = bounds.scale * state.zoom;
 			return {
-				x: window.innerWidth / 2 + rotated.x * scale,
-				y: window.innerHeight / 2 - rotated.y * scale,
+				x: window.innerWidth / 2 + state.panX + rotated.x * scale,
+				y: window.innerHeight / 2 + state.panY - rotated.y * scale,
 				z: rotated.z
 			};
 		}
@@ -117,13 +129,10 @@
 			ctx.globalAlpha = 1;
 		}
 
-		function boundsFor(data) {
-			let maxX = 0, maxY = 0, maxZ = 0;
-			for (const container of data.containers || []) {
-				maxX += container.dx;
-				maxY = Math.max(maxY, container.dy);
-				maxZ = Math.max(maxZ, container.dz);
-			}
+		function boundsFor(container) {
+			const maxX = container.dx;
+			const maxY = container.dy;
+			const maxZ = container.dz;
 			const maxDim = Math.max(maxX, maxY, maxZ, 1);
 			return {
 				cx: maxX / 2,
@@ -139,24 +148,53 @@
 			ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
 			if (!state.data) return;
 
-			const bounds = boundsFor(state.data);
+			const container = (state.data.containers || [])[state.selectedIndex];
+			if (!container) return;
+			const bounds = boundsFor(container);
 			const faces = [];
-			let offsetX = 0;
-			for (const container of state.data.containers || []) {
-				for (const face of cuboidFaces(offsetX, 0, 0, container.dx, container.dy, container.dz, bounds)) {
-					faces.push({ face, fill: "rgba(255,255,255,0.04)", stroke: "rgba(255,255,255,0.7)", alpha: 1 });
+			for (const face of cuboidFaces(0, 0, 0, container.dx, container.dy, container.dz, bounds)) {
+				faces.push({ face, fill: "rgba(255,255,255,0.04)", stroke: "rgba(255,255,255,0.7)", alpha: 1 });
+			}
+			for (const placement of container.stack?.placements || []) {
+				const stackable = placement.stackable;
+				const house = placement.houseBsId || (stackable.name || "").split(" ")[0] || stackable.id || "cargo";
+				for (const face of cuboidFaces(placement.x, placement.y, placement.z, stackable.dx, stackable.dy, stackable.dz, bounds)) {
+					faces.push({ face, fill: colorFor(house), stroke: "rgba(0,0,0,0.72)", alpha: 0.68 });
 				}
-				for (const placement of container.stack?.placements || []) {
-					const stackable = placement.stackable;
-					const house = placement.houseBsId || (stackable.name || "").split(" ")[0] || stackable.id || "cargo";
-					for (const face of cuboidFaces(offsetX + placement.x, placement.y, placement.z, stackable.dx, stackable.dy, stackable.dz, bounds)) {
-						faces.push({ face, fill: colorFor(house), stroke: "rgba(0,0,0,0.72)", alpha: 0.68 });
-					}
-				}
-				offsetX += container.dx + 100;
 			}
 			faces.sort((a, b) => faceDepth(a.face) - faceDepth(b.face));
 			for (const item of faces) drawFace(item.face, item.fill, item.stroke, item.alpha);
+		}
+
+		function selectContainer(index) {
+			state.selectedIndex = index;
+			state.panX = 0;
+			state.panY = 0;
+			state.zoom = 1;
+			const containers = state.data?.containers || [];
+			const container = containers[index];
+			containerListEl.querySelectorAll("button").forEach((button, buttonIndex) => {
+				button.classList.toggle("active", buttonIndex === index);
+			});
+			if (!container) return;
+			const placements = container.stack?.placements || [];
+			selectionEl.textContent = `当前：${container.id || container.name || `柜 ${index + 1}`} | ${placements.length} 件`;
+			const houses = new Set(placements.map(placement =>
+				placement.houseBsId || (placement.stackable?.name || "").split(" ")[0]).filter(Boolean));
+			legendEl.innerHTML = Array.from(houses).sort().map(house => `<span class="badge" style="border-left:10px solid ${colorFor(house)}">${house}</span>`).join("");
+			draw();
+		}
+
+		function renderContainerList(containers) {
+			containerListEl.replaceChildren();
+			containers.forEach((container, index) => {
+				const button = document.createElement("button");
+				button.type = "button";
+				button.className = "container-button";
+				button.textContent = `${index + 1}. ${container.id || container.name || "未命名柜"}`;
+				button.addEventListener("click", () => selectContainer(index));
+				containerListEl.appendChild(button);
+			});
 		}
 
 		async function load() {
@@ -171,26 +209,34 @@
 			const containers = state.data.containers || [];
 			const placements = containers.reduce((sum, container) => sum + (container.stack?.placements?.length || 0), 0);
 			statusEl.textContent = `${resultId} | ${containers.length} 柜 | ${placements} 件`;
-			const houses = new Set();
-			for (const container of containers) {
-				for (const placement of container.stack?.placements || []) {
-					houses.add(placement.houseBsId || (placement.stackable.name || "").split(" ")[0]);
-				}
-			}
-			legendEl.innerHTML = Array.from(houses).sort().map(house => `<span class="badge" style="border-left:10px solid ${colorFor(house)}">${house}</span>`).join("");
-			draw();
+			renderContainerList(containers);
+			selectContainer(0);
 		}
 
 		canvas.addEventListener("mousedown", event => {
-			state.dragging = true;
+			if (event.button !== 0 && event.button !== 2) return;
+			state.dragMode = event.button === 2 ? "pan" : "rotate";
 			state.lastX = event.clientX;
 			state.lastY = event.clientY;
+			canvas.classList.add("dragging");
+			event.preventDefault();
 		});
-		window.addEventListener("mouseup", () => state.dragging = false);
+		canvas.addEventListener("contextmenu", event => event.preventDefault());
+		window.addEventListener("mouseup", () => {
+			state.dragMode = null;
+			canvas.classList.remove("dragging");
+		});
 		window.addEventListener("mousemove", event => {
-			if (!state.dragging) return;
-			state.yaw += (event.clientX - state.lastX) * 0.008;
-			state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch + (event.clientY - state.lastY) * 0.008));
+			if (!state.dragMode) return;
+			const deltaX = event.clientX - state.lastX;
+			const deltaY = event.clientY - state.lastY;
+			if (state.dragMode === "rotate") {
+				state.yaw += deltaX * 0.008;
+				state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch + deltaY * 0.008));
+			} else {
+				state.panX += deltaX;
+				state.panY += deltaY;
+			}
 			state.lastX = event.clientX;
 			state.lastY = event.clientY;
 			draw();
