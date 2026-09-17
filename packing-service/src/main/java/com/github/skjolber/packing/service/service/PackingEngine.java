@@ -33,9 +33,10 @@ class PackingEngine {
 	private final WholeOrderAssignmentSolver assignmentSolver = new WholeOrderAssignmentSolver();
 	private final PlacementSupport.Policy supportPolicy;
 	private final boolean diagnosticsEnabled;
+	private final boolean blockBeamOnly;
 
 	PackingEngine() {
-		this(PlacementSupport.DEFAULT_POLICY, false);
+		this(PlacementSupport.DEFAULT_POLICY, false, false);
 	}
 
 	@Autowired
@@ -44,18 +45,24 @@ class PackingEngine {
 			@Value("${packing.support.require-center:true}") boolean requireCenterSupport,
 			@Value("${packing.support.maximum-overhang-mm:20}") int maximumOverhangMillimeters,
 			@Value("${packing.support.maximum-overhang-ratio:0.05}") double maximumOverhangRatio,
-			@Value("${packing.diagnostics.enabled:false}") boolean diagnosticsEnabled) {
+			@Value("${packing.diagnostics.enabled:false}") boolean diagnosticsEnabled,
+			@Value("${packing.block-beam-only:false}") boolean blockBeamOnly) {
 		this(new PlacementSupport.Policy(minimumAreaRatio, requireCenterSupport,
-				maximumOverhangMillimeters, maximumOverhangRatio), diagnosticsEnabled);
+				maximumOverhangMillimeters, maximumOverhangRatio), diagnosticsEnabled, blockBeamOnly);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy) {
-		this(supportPolicy, false);
+		this(supportPolicy, false, false);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled) {
+		this(supportPolicy, diagnosticsEnabled, false);
+	}
+
+	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly) {
 		this.supportPolicy = supportPolicy;
 		this.diagnosticsEnabled = diagnosticsEnabled;
+		this.blockBeamOnly = blockBeamOnly;
 	}
 
 	PackagerResult pack(PackingPlan plan) {
@@ -63,14 +70,12 @@ class PackingEngine {
 			return null;
 		}
 
-		// Preserve the established path. A one-container result already satisfies
-		// the whole-order rule without invoking any grouping implementation.
-		PackagerResult original = packFlat(plan, 0L);
-		if (totalContainerCount(plan.containerItems()) == 1
-				|| original != null && original.isSuccess() && !splitsHouseBills(original)) {
-			return original;
+		// A one-container request already satisfies the whole-order rule. For
+		// multiple physical containers, assign complete house bills first instead
+		// of spending time on a flat result which is likely to split them.
+		if (totalContainerCount(plan.containerItems()) == 1) {
+			return packFlat(plan, 0L);
 		}
-
 		return packWholeOrders(plan);
 	}
 
@@ -172,6 +177,9 @@ class PackingEngine {
 				"BlockBeam" + (swapLengthWidth ? "-SWAPPED" : ""), deadline);
 		if (blockBeam != null && blockBeam.isSuccess()) {
 			return blockBeam;
+		}
+		if (blockBeamOnly) {
+			return null;
 		}
 		if (hasBusinessRule(plan)) {
 			boolean hasDoorSideRule = DoorSideRuleSupport.hasDoorSideRule(plan.boxItems());

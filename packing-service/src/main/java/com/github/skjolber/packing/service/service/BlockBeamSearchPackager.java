@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
@@ -29,6 +30,7 @@ final class BlockBeamSearchPackager {
 	private static final int DEFAULT_BEAM_WIDTH = 64;
 	private static final int DEFAULT_BRANCHING = 48;
 	private static final int MAX_VERTICAL_UNITS = 5;
+	private static final int TRACKED_FIT_SPACES = 4;
 
 	private final int beamWidth;
 	private final int branching;
@@ -50,9 +52,10 @@ final class BlockBeamSearchPackager {
 		if (catalog.isEmpty()) return null;
 
 		int[] initialRemaining = items.stream().mapToInt(BoxItem::getCount).toArray();
-		State initial = new State(initialRemaining,
-				List.of(new Space(0, 0, 0, container.getLoadDx(), container.getLoadDy(), container.getLoadDz())),
-				List.of(), 0L, 0, 0, 0);
+		List<Space> initialSpaces = List.of(
+				new Space(0, 0, 0, container.getLoadDx(), container.getLoadDy(), container.getLoadDz()));
+		State initial = new State(initialRemaining, initialSpaces, List.of(), 0L, 0, 0, 0,
+				feasibility(initialRemaining, initialSpaces, items));
 		List<State> beam = List.of(initial);
 		Set<String> visited = new HashSet<>();
 		visited.add(initial.key());
@@ -67,14 +70,16 @@ final class BlockBeamSearchPackager {
 				}
 				expandedStates++;
 				for (Move move : moves(state, catalog, container)) {
-					State child = apply(state, move, container);
+					State child = apply(state, move, container, items);
 					generatedStates++;
-					if (visited.add(child.key())) next.add(child);
+					// Once no current maximal space can accommodate a remaining item,
+					// later placements can only shrink those spaces. Keep that dead end
+					// out of the beam before it displaces a viable alternative.
+					if (child.feasibility().strandedTypes() == 0 && visited.add(child.key())) next.add(child);
 				}
 			}
 			if (next.isEmpty()) break;
-			next.sort(stateComparator(container));
-			if (next.size() > beamWidth) next = new ArrayList<>(next.subList(0, beamWidth));
+			next = selectBeam(next, container);
 			for (State state : next) {
 				if (state.complete()) {
 					return result(container, state, started, expandedStates, generatedStates);
@@ -145,7 +150,7 @@ final class BlockBeamSearchPackager {
 				- space.z() * 0.01;
 	}
 
-	private State apply(State state, Move move, Container container) {
+	private State apply(State state, Move move, Container container, List<BoxItem> items) {
 		Space used = state.spaces().get(move.spaceIndex());
 		Block block = move.block();
 		int[] remaining = state.remaining().clone();
@@ -157,7 +162,122 @@ final class BlockBeamSearchPackager {
 		return new State(remaining, spaces, placements,
 				state.packedVolume() + block.volume(), state.weight() + block.weight(),
 				Math.max(state.maxX(), used.x() + block.dx()),
-				Math.max(state.maxZ(), used.z() + block.dz()));
+				Math.max(state.maxZ(), used.z() + block.dz()), feasibility(remaining, spaces, items));
+	}
+
+	List<State> selectBeam(List<State> candidates, Container container) {
+		if (candidates.size() <= beamWidth) {
+			candidates.sort(stateComparator(container));
+			return candidates;
+		}
+
+		Comparator<State> overall = stateComparator(container);
+		Comparator<State> criticalSpace = Comparator
+				.comparingInt((State state) -> state.feasibility().strandedTypes())
+				.thenComparing(Comparator.comparingInt(
+						(State state) -> state.feasibility().minimumFitSpaces()).reversed())
+				.thenComparingInt(state -> state.feasibility().scarceTypes())
+				.thenComparing(Comparator.comparingInt(
+						(State state) -> state.feasibility().minimumClearance()).reversed())
+				.thenComparing(overall);
+		Comparator<State> openSpace = Comparator
+				.comparingLong((State state) -> largestSpace(state.spaces())).reversed()
+				.thenComparingInt(state -> state.spaces().size())
+				.thenComparing(overall);
+
+		LinkedHashSet<State> selected = new LinkedHashSet<>(beamWidth * 2);
+		addBest(selected, candidates, overall,
+				availableQuota(selected, Math.max(1, beamWidth / 2)));
+		addBest(selected, candidates, criticalSpace,
+				availableQuota(selected, Math.max(1, beamWidth / 4)));
+		addBest(selected, candidates, openSpace,
+				availableQuota(selected, Math.max(1, beamWidth / 8)));
+		addShapeDiversity(selected, candidates, overall, container,
+				availableQuota(selected, Math.max(1, beamWidth / 8)));
+		addBest(selected, candidates, overall, beamWidth - selected.size());
+		return new ArrayList<>(selected);
+	}
+
+	private int availableQuota(Set<State> selected, int requested) {
+		return Math.max(0, Math.min(requested, beamWidth - selected.size()));
+	}
+
+	private static void addBest(Set<State> selected, List<State> candidates,
+			Comparator<State> comparator, int count) {
+		if (count <= 0) return;
+		List<State> sorted = new ArrayList<>(candidates);
+		sorted.sort(comparator);
+		int added = 0;
+		for (State state : sorted) {
+			if (selected.add(state) && ++added >= count) return;
+		}
+	}
+
+	private static void addShapeDiversity(Set<State> selected, List<State> candidates,
+			Comparator<State> comparator, Container container, int count) {
+		if (count <= 0) return;
+		List<State> sorted = new ArrayList<>(candidates);
+		sorted.sort(comparator);
+		Set<String> buckets = new HashSet<>();
+		int added = 0;
+		for (State state : sorted) {
+			int lengthBucket = 4 * state.maxX() / Math.max(1, container.getLoadDx());
+			int heightBucket = 4 * state.maxZ() / Math.max(1, container.getLoadDz());
+			int spaceBucket = Math.min(7, state.spaces().size() / 4);
+			String bucket = lengthBucket + ":" + heightBucket + ":" + spaceBucket;
+			if (selected.contains(state) || !buckets.add(bucket)) continue;
+			selected.add(state);
+			if (++added >= count) return;
+		}
+	}
+
+	private static long largestSpace(List<Space> spaces) {
+		long largest = 0L;
+		for (Space space : spaces) largest = Math.max(largest, space.volume());
+		return largest;
+	}
+
+	static Feasibility feasibility(int[] remaining, List<Space> spaces, List<BoxItem> items) {
+		int strandedTypes = 0;
+		int scarceTypes = 0;
+		int minimumFitSpaces = Integer.MAX_VALUE;
+		int minimumClearance = Integer.MAX_VALUE;
+		for (int itemIndex = 0; itemIndex < remaining.length; itemIndex++) {
+			if (remaining[itemIndex] == 0) continue;
+			Box box = items.get(itemIndex).getBox();
+			int fitSpaces = 0;
+			int bestClearance = -1;
+			for (Space space : spaces) {
+				int clearance = clearance(box, space);
+				if (clearance < 0) continue;
+				fitSpaces++;
+				bestClearance = Math.max(bestClearance, clearance);
+				if (fitSpaces >= TRACKED_FIT_SPACES) break;
+			}
+			if (fitSpaces == 0) {
+				strandedTypes++;
+				minimumFitSpaces = 0;
+				minimumClearance = -1;
+				continue;
+			}
+			minimumFitSpaces = Math.min(minimumFitSpaces, fitSpaces);
+			minimumClearance = Math.min(minimumClearance, bestClearance);
+			if (fitSpaces <= 2) scarceTypes++;
+		}
+		if (minimumFitSpaces == Integer.MAX_VALUE) minimumFitSpaces = TRACKED_FIT_SPACES;
+		if (minimumClearance == Integer.MAX_VALUE) minimumClearance = 0;
+		return new Feasibility(strandedTypes, scarceTypes, minimumFitSpaces, minimumClearance);
+	}
+
+	private static int clearance(Box box, Space space) {
+		int best = -1;
+		for (BoxStackValue orientation : box.getStackValues()) {
+			if (orientation.getDx() > space.dx() || orientation.getDy() > space.dy()
+					|| orientation.getDz() > space.dz()) continue;
+			best = Math.max(best, Math.min(space.dx() - orientation.getDx(),
+					Math.min(space.dy() - orientation.getDy(), space.dz() - orientation.getDz())));
+		}
+		return best;
 	}
 
 	private static List<Space> updateSpaces(List<Space> source, int x, int y, int z,
@@ -287,8 +407,12 @@ final class BlockBeamSearchPackager {
 		}
 	}
 
-	private record State(int[] remaining, List<Space> spaces, List<BlockPlacement> placements,
-			long packedVolume, int weight, int maxX, int maxZ) {
+	record Feasibility(int strandedTypes, int scarceTypes,
+			int minimumFitSpaces, int minimumClearance) {
+	}
+
+	record State(int[] remaining, List<Space> spaces, List<BlockPlacement> placements,
+			long packedVolume, int weight, int maxX, int maxZ, Feasibility feasibility) {
 		boolean complete() {
 			for (int value : remaining) if (value != 0) return false;
 			return true;
@@ -313,6 +437,10 @@ final class BlockBeamSearchPackager {
 			double height = maxZ / (double) container.getLoadDz();
 			long largestSpace = spaces.stream().mapToLong(Space::volume).max().orElse(0L);
 			return fill * 1_000_000.0 + largestSpace / (double) container.getMaxLoadVolume() * 5_000.0
+					+ feasibility.minimumFitSpaces() * 2_000.0
+					+ feasibility.minimumClearance() * 5.0
+					- feasibility.scarceTypes() * 500.0
+					- feasibility.strandedTypes() * 10_000_000.0
 					- spaces.size() * 15.0 - length * 100.0 - height * 50.0;
 		}
 
@@ -323,7 +451,7 @@ final class BlockBeamSearchPackager {
 		}
 	}
 
-	private record Space(int x, int y, int z, int dx, int dy, int dz) {
+	record Space(int x, int y, int z, int dx, int dy, int dz) {
 		static final Comparator<Space> ORDER = Comparator.comparingInt(Space::z)
 				.thenComparingInt(Space::y).thenComparingInt(Space::x)
 				.thenComparingInt(Space::dz).thenComparingInt(Space::dy).thenComparingInt(Space::dx);
