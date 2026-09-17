@@ -3,8 +3,11 @@ package com.github.skjolber.packing.service.service;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,6 +32,7 @@ class PackingEngine {
 	private static final long WHOLE_ORDER_SEARCH_MILLIS = 180_000L;
 	private static final long BETTER_SOLUTION_SEARCH_MILLIS = 15_000L;
 	private static final long BLOCK_BEAM_SEARCH_MILLIS = 30_000L;
+	private static final AtomicLong SEARCH_SEQUENCE = new AtomicLong();
 
 	private final WholeOrderAssignmentSolver assignmentSolver = new WholeOrderAssignmentSolver();
 	private final PlacementSupport.Policy supportPolicy;
@@ -80,9 +84,18 @@ class PackingEngine {
 	}
 
 	private PackagerResult packWholeOrders(PackingPlan plan) {
+		long searchStarted = System.nanoTime();
 		long deadline = System.currentTimeMillis() + WHOLE_ORDER_SEARCH_MILLIS;
+		long searchId = SEARCH_SEQUENCE.incrementAndGet();
 		List<ContainerItem> physicalContainers = expandContainerItems(plan.containerItems());
+		long candidateGenerationStarted = System.nanoTime();
 		List<WholeOrderAssignmentSolver.Candidate> candidates = assignmentSolver.candidates(plan);
+		long candidateGenerationMillis = elapsedMillis(candidateGenerationStarted);
+		System.out.println("packing-service whole-order search-start searchId=" + searchId
+				+ " candidates=" + candidates.size() + " candidateGenerationMs=" + candidateGenerationMillis
+				+ " containers=" + physicalContainers.size() + " houseBills=" + houseBillCount(plan.boxItems())
+				+ " itemTypes=" + plan.boxItems().size() + " units=" + unitCount(plan.boxItems())
+				+ " deadlineMs=" + WHOLE_ORDER_SEARCH_MILLIS);
 		PackagerResult best = null;
 		int attempted = 0;
 		int successful = 0;
@@ -92,27 +105,59 @@ class PackingEngine {
 				break;
 			}
 			attempted++;
+			long candidateStarted = System.nanoTime();
+			System.out.println("packing-service whole-order candidate-start searchId=" + searchId
+					+ " attempt=" + attempted + " source=" + safe(candidate.source())
+					+ " containers=" + candidate.itemsByContainer().size());
 			List<Container> packedContainers = new ArrayList<>();
 			long duration = 0L;
 			boolean success = true;
+			int containersAttempted = 0;
+			int failedContainer = -1;
+			String failureReason = "none";
 			for (int i = 0; i < physicalContainers.size(); i++) {
 				List<com.github.skjolber.packing.api.BoxItem> items = candidate.itemsByContainer().get(i);
 				if (items.isEmpty()) {
+					System.out.println("packing-service whole-order container-skip searchId=" + searchId
+							+ " attempt=" + attempted + " source=" + safe(candidate.source())
+							+ " container=" + (i + 1) + "/" + physicalContainers.size()
+							+ " containerId=" + safe(physicalContainers.get(i).getContainer().getId())
+							+ " reason=empty");
 					continue;
 				}
+				containersAttempted++;
+				Container container = physicalContainers.get(i).getContainer();
+				LogContext context = new LogContext(searchId, attempted, candidate.source(),
+						i + 1, physicalContainers.size(), container.getId());
+				long containerStarted = System.nanoTime();
+				System.out.println("packing-service whole-order container-start" + context.fields()
+						+ " houseBills=" + houseBillCount(items) + " itemTypes=" + items.size()
+						+ " units=" + unitCount(items) + " volume=" + totalVolume(items)
+						+ " weight=" + totalWeight(items)
+						+ " volumeFillPct=" + percent(totalVolume(items), container.getMaxLoadVolume())
+						+ " weightFillPct=" + percent(totalWeight(items), container.getMaxLoadWeight())
+						+ (diagnosticsEnabled ? " houseBillIds=" + houseBillIds(items) : ""));
 				PackingPlan containerPlan = new PackingPlan(
 						plan.requestedContainers(),
 						List.of(physicalContainers.get(i)),
 						items,
 						plan.cargoLines(),
 						plan.warnings());
-				PackagerResult packed = packFlat(containerPlan, deadline);
+				PackagerResult packed = packFlat(containerPlan, deadline, context);
 				if (packed == null || !packed.isSuccess() || packed.size() != 1) {
 					success = false;
+					failedContainer = i + 1;
+					failureReason = System.currentTimeMillis() >= deadline ? "deadline" : "no-algorithm-succeeded";
+					System.out.println("packing-service whole-order container-end" + context.fields()
+							+ " success=false elapsedMs=" + elapsedMillis(containerStarted)
+							+ " reason=" + failureReason);
 					break;
 				}
 				packedContainers.add(packed.get(0));
 				duration += packed.getDuration();
+				System.out.println("packing-service whole-order container-end" + context.fields()
+						+ " success=true elapsedMs=" + elapsedMillis(containerStarted)
+						+ " placements=" + packed.get(0).getStack().size());
 			}
 			if (success) {
 				PackagerResult packed = new PackagerResult(packedContainers, duration, false);
@@ -124,11 +169,22 @@ class PackingEngine {
 					if (successful == 1) {
 						stopAt = Math.min(deadline, System.currentTimeMillis() + BETTER_SOLUTION_SEARCH_MILLIS);
 					}
+				} else {
+					success = false;
+					failureReason = "split-house-bill";
 				}
 			}
+			System.out.println("packing-service whole-order candidate-end searchId=" + searchId
+					+ " attempt=" + attempted + " source=" + safe(candidate.source())
+					+ " success=" + success + " containersAttempted=" + containersAttempted
+					+ " failedContainer=" + failedContainer + " reason=" + failureReason
+					+ " elapsedMs=" + elapsedMillis(candidateStarted));
 		}
 		System.out.println("packing-service whole-order candidates=" + candidates.size()
-				+ " attempted=" + attempted + " successful=" + successful + " success=" + (best != null));
+				+ " searchId=" + searchId + " attempted=" + attempted + " successful=" + successful
+				+ " success=" + (best != null) + " candidateGenerationMs=" + candidateGenerationMillis
+				+ " elapsedMs=" + elapsedMillis(searchStarted)
+				+ " termination=" + terminationReason(candidates.size(), attempted, successful, deadline));
 		return best;
 	}
 
@@ -161,20 +217,25 @@ class PackingEngine {
 	}
 
 	private PackagerResult packFlat(PackingPlan plan, long deadline) {
+		return packFlat(plan, deadline, LogContext.NONE);
+	}
+
+	private PackagerResult packFlat(PackingPlan plan, long deadline, LogContext context) {
 		PackagerResult best = null;
-		best = better(best, packOrientation(plan, false, deadline));
+		best = better(best, packOrientation(plan, false, deadline, context));
 		if (best != null && best.isSuccess() && best.size() == 1) {
 			return best;
 		}
-		best = better(best, packOrientation(plan, true, deadline));
+		best = better(best, packOrientation(plan, true, deadline, context));
 		return best;
 	}
 
-	private PackagerResult packOrientation(PackingPlan plan, boolean swapLengthWidth, long deadline) {
+	private PackagerResult packOrientation(PackingPlan plan, boolean swapLengthWidth, long deadline,
+			LogContext context) {
 		List<ContainerItem> containers = swapLengthWidth ? swappedContainers(plan.containerItems()) : plan.containerItems();
 		PackagerResult best = null;
 		PackagerResult blockBeam = tryBlockBeamSearch(plan, containers,
-				"BlockBeam" + (swapLengthWidth ? "-SWAPPED" : ""), deadline);
+				"BlockBeam" + (swapLengthWidth ? "-SWAPPED" : ""), deadline, context);
 		if (blockBeam != null && blockBeam.isSuccess()) {
 			return blockBeam;
 		}
@@ -186,7 +247,7 @@ class PackingEngine {
 			best = better(best, tryMacroPacks(plan, containers,
 					"Plain-Rules-MACRO-Y", swapLengthWidth,
 					hasDoorSideRule ? new RuleBoxItemComparator() : VolumeThenWeightBoxItemComparator.getInstance(),
-					hasDoorSideRule, deadline));
+					hasDoorSideRule, deadline, context));
 			best = better(best, tryPack(plan, containers, "Plain-Rules-LAYOUT" + (swapLengthWidth ? "-SWAPPED" : ""), PlainPackager.newBuilder()
 					.withPlacementControlsBuilderFactory(() -> new BottomPlacementControlsBuilder(
 							new LayoutPlacementComparator(),
@@ -194,45 +255,47 @@ class PackingEngine {
 							supportPolicy,
 							hasDoorSideRule,
 							true))
-					.build(), deadline));
+					.build(), deadline, context));
 			best = better(best, tryPack(plan, containers, "Plain-Rules" + (swapLengthWidth ? "-SWAPPED" : ""), PlainPackager.newBuilder()
 					.withPlacementControlsBuilderFactory(() -> new BottomPlacementControlsBuilder(
 							new PlainPlacementComparator(),
 							hasDoorSideRule ? new RuleBoxItemComparator() : VolumeThenWeightBoxItemComparator.getInstance(),
 							supportPolicy,
 							hasDoorSideRule))
-					.build(), deadline));
+					.build(), deadline, context));
 			return best;
 		}
 		best = better(best, tryMacroPacks(plan, containers, "Plain-MACRO-Y", swapLengthWidth,
-				VolumeThenWeightBoxItemComparator.getInstance(), false, deadline));
+				VolumeThenWeightBoxItemComparator.getInstance(), false, deadline, context));
 		best = better(best, tryPack(plan, containers, "Plain-LAYOUT" + (swapLengthWidth ? "-SWAPPED" : ""),
-				layoutPlain(VolumeThenWeightBoxItemComparator.getInstance()), deadline));
-		best = better(best, tryPack(plan, containers, "LAFF" + (swapLengthWidth ? "-SWAPPED" : ""), LargestAreaFitFirstPackager.newBuilder().build(), deadline));
-		best = better(best, tryPack(plan, containers, "FastLAFF" + (swapLengthWidth ? "-SWAPPED" : ""), FastLargestAreaFitFirstPackager.newBuilder().build(), deadline));
+				layoutPlain(VolumeThenWeightBoxItemComparator.getInstance()), deadline, context));
+		best = better(best, tryPack(plan, containers, "LAFF" + (swapLengthWidth ? "-SWAPPED" : ""), LargestAreaFitFirstPackager.newBuilder().build(), deadline, context));
+		best = better(best, tryPack(plan, containers, "FastLAFF" + (swapLengthWidth ? "-SWAPPED" : ""), FastLargestAreaFitFirstPackager.newBuilder().build(), deadline, context));
 		String suffix = swapLengthWidth ? "-SWAPPED" : "";
 		best = better(best, tryPack(plan, containers, "Plain-STABLE" + suffix,
-				stablePlain(VolumeThenWeightBoxItemComparator.getInstance(), new PlainPlacementComparator()), deadline));
+				stablePlain(VolumeThenWeightBoxItemComparator.getInstance(), new PlainPlacementComparator()), deadline, context));
 		best = better(best, tryPack(plan, containers, "Plain-STABLE-AREA" + suffix,
-				stablePlain(new LargestAreaBoxItemComparator(), new PlainPlacementComparator()), deadline));
+				stablePlain(new LargestAreaBoxItemComparator(), new PlainPlacementComparator()), deadline, context));
 		best = better(best, tryPack(plan, containers, "Plain-STABLE-FLOOR-Y" + suffix,
-				stablePlain(VolumeThenWeightBoxItemComparator.getInstance(), floorFirst(true)), deadline));
+				stablePlain(VolumeThenWeightBoxItemComparator.getInstance(), floorFirst(true)), deadline, context));
 		best = better(best, tryPack(plan, containers, "Plain-STABLE-FLOOR-X" + suffix,
-				stablePlain(VolumeThenWeightBoxItemComparator.getInstance(), floorFirst(false)), deadline));
+				stablePlain(VolumeThenWeightBoxItemComparator.getInstance(), floorFirst(false)), deadline, context));
 		return best;
 	}
 
 	private PackagerResult tryBlockBeamSearch(PackingPlan plan, List<ContainerItem> containers,
-			String label, long deadline) {
+			String label, long deadline, LogContext context) {
 		if (containers.size() != 1 || totalContainerCount(containers) != 1) return null;
 		long localDeadline = System.currentTimeMillis() + BLOCK_BEAM_SEARCH_MILLIS;
 		if (deadline > 0L) localDeadline = Math.min(localDeadline, deadline);
 		long started = System.nanoTime();
 		PackagerResult result = new BlockBeamSearchPackager().pack(
-				containers.get(0).getContainer(), plan.boxItems(), localDeadline);
+				containers.get(0).getContainer(), plan.boxItems(), localDeadline, context.fields());
 		long elapsedMillis = (System.nanoTime() - started) / 1_000_000L;
 		if (result == null || !result.isSuccess()) {
-			System.out.println("packing-service " + label + " success=false elapsedMs=" + elapsedMillis);
+			System.out.println("packing-service " + label + context.fields()
+					+ " success=false elapsedMs=" + elapsedMillis
+					+ " reason=" + (System.currentTimeMillis() >= localDeadline ? "deadline" : "search-exhausted"));
 			return null;
 		}
 		PlacementSupport.Validation support = PlacementSupport.validate(result, supportPolicy);
@@ -242,7 +305,7 @@ class PackingEngine {
 			DoorSideRuleSupport.mirrorToDoorSide(result);
 			valid = DoorSideRuleSupport.isValid(result);
 		}
-		System.out.println("packing-service " + label + " success=" + valid
+		System.out.println("packing-service " + label + context.fields() + " success=" + valid
 				+ " placements=" + result.get(0).getStack().size() + " elapsedMs=" + elapsedMillis
 				+ (support.valid() ? "" : " rejectedBox=" + support.boxId()
 						+ " reason=" + support.reason() + " ratio=" + support.supportRatio()));
@@ -251,7 +314,7 @@ class PackingEngine {
 
 	private PackagerResult tryMacroPacks(PackingPlan plan, List<ContainerItem> containers,
 			String label, boolean swapLengthWidth, Comparator<BoxItem> boxComparator,
-			boolean preferDoorSidePlacements, long deadline) {
+			boolean preferDoorSidePlacements, long deadline, LogContext context) {
 		if (containers.size() != 1 || totalContainerCount(containers) != 1) {
 			return null;
 		}
@@ -266,7 +329,7 @@ class PackingEngine {
 				best = better(best, tryMacroPack(plan, containers,
 						label + "C" + cuboid[0] + "x" + cuboid[1] + "x" + cuboid[2]
 								+ "T" + macroTypeLabel(typeLimit) + (swapLengthWidth ? "-SWAPPED" : ""),
-						boxComparator, preferDoorSidePlacements, deadline, macroPlan));
+						boxComparator, preferDoorSidePlacements, deadline, macroPlan, context));
 			}
 		}
 		int[][] grids = {{2, 2}, {1, 4}, {1, 2}};
@@ -275,13 +338,13 @@ class PackingEngine {
 					plan.boxItems(), container, grid[0], grid[1]);
 			best = better(best, tryMacroPack(plan, containers,
 					label + "G" + grid[0] + "x" + grid[1] + (swapLengthWidth ? "-SWAPPED" : ""),
-					boxComparator, preferDoorSidePlacements, deadline, macroPlan));
+					boxComparator, preferDoorSidePlacements, deadline, macroPlan, context));
 		}
 		MacroBlockPlanner.Plan fullRows = MacroBlockPlanner.rowsAcrossY(
 				plan.boxItems(), container, Integer.MAX_VALUE);
 		best = better(best, tryMacroPack(plan, containers,
 				label + "FULL" + (swapLengthWidth ? "-SWAPPED" : ""),
-				boxComparator, preferDoorSidePlacements, deadline, fullRows));
+				boxComparator, preferDoorSidePlacements, deadline, fullRows, context));
 		return best;
 	}
 
@@ -291,7 +354,7 @@ class PackingEngine {
 
 	private PackagerResult tryMacroPack(PackingPlan plan, List<ContainerItem> containers, String label,
 			Comparator<BoxItem> boxComparator, boolean preferDoorSidePlacements, long deadline,
-			MacroBlockPlanner.Plan macroPlan) {
+			MacroBlockPlanner.Plan macroPlan, LogContext context) {
 		if (!macroPlan.hasMacros()) {
 			return null;
 		}
@@ -315,23 +378,31 @@ class PackingEngine {
 			PackagerResult result = packed.isSuccess() ? macroPlan.expand(packed) : packed;
 			long elapsedMillis = (System.nanoTime() - started) / 1_000_000L;
 			PackingSearchDiagnostics.Counters diagnostics = PackingSearchDiagnostics.finish();
-			System.out.println("packing-service " + label + " success=" + result.isSuccess()
-					+ " macroTypes=" + macroPlan.blocks().size()
-					+ " placements=" + (result.isSuccess() ? result.get(0).getStack().size() : 0)
-					+ " elapsedMs=" + elapsedMillis + " candidates=" + diagnostics.candidates()
-					+ " rejected=" + diagnostics.rejections());
 			if (!result.isSuccess()) {
+				System.out.println("packing-service " + label + context.fields() + " success=false"
+						+ " macroTypes=" + macroPlan.blocks().size() + " placements=0"
+						+ " elapsedMs=" + elapsedMillis + " candidates=" + diagnostics.candidates()
+						+ " rejected=" + diagnostics.rejections() + " reason=" + deadlineReason(deadline));
 				return null;
 			}
 			PlacementSupport.Validation support = PlacementSupport.validate(result, supportPolicy);
-			boolean valid = support.valid() && BottomRuleSupport.isValid(result)
-					&& NoPressRuleSupport.isValid(result);
+			boolean bottomValid = BottomRuleSupport.isValid(result);
+			boolean noPressValid = NoPressRuleSupport.isValid(result);
+			boolean valid = support.valid() && bottomValid && noPressValid;
+			boolean doorValid = true;
 			if (valid && DoorSideRuleSupport.hasDoorSideRule(plan.boxItems())) {
 				DoorSideRuleSupport.mirrorToDoorSide(result);
-				valid = DoorSideRuleSupport.isValid(result);
+				doorValid = DoorSideRuleSupport.isValid(result);
+				valid = doorValid;
 			}
+			System.out.println("packing-service " + label + context.fields() + " success=" + valid
+					+ " macroTypes=" + macroPlan.blocks().size()
+					+ " placements=" + result.get(0).getStack().size()
+					+ " elapsedMs=" + elapsedMillis + " candidates=" + diagnostics.candidates()
+					+ " rejected=" + diagnostics.rejections()
+					+ " reason=" + validationReason(support, bottomValid, noPressValid, doorValid));
 			if (!valid && !support.valid()) {
-				System.out.println("packing-service " + label + " expanded-result rejected box="
+				System.out.println("packing-service " + label + context.fields() + " expanded-result rejected box="
 						+ support.boxId() + " reason=" + support.reason()
 						+ " ratio=" + support.supportRatio());
 			}
@@ -372,7 +443,8 @@ class PackingEngine {
 	}
 
 	private PackagerResult tryPack(PackingPlan plan, List<ContainerItem> containers, String label,
-			Packager<? extends AbstractPackagerResultBuilder<?>> packager, long deadline) {
+			Packager<? extends AbstractPackagerResultBuilder<?>> packager, long deadline,
+			LogContext context) {
 		long started = System.nanoTime();
 		PackingSearchDiagnostics.begin(diagnosticsEnabled);
 		try {
@@ -390,25 +462,33 @@ class PackingEngine {
 			PackingSearchDiagnostics.Counters diagnostics = PackingSearchDiagnostics.finish();
 			int placements = result.getContainers().stream()
 					.mapToInt(container -> container.getStack().getPlacements().size()).sum();
-			System.out.println("packing-service " + label + " success=" + result.isSuccess()
-					+ " containerCount=" + result.size() + " placements=" + placements
-					+ " elapsedMs=" + elapsedMillis + " candidates=" + diagnostics.candidates()
-					+ " rejected=" + diagnostics.rejections());
 			PlacementSupport.Validation support = result.isSuccess()
 					? PlacementSupport.validate(result, supportPolicy)
 					: PlacementSupport.Validation.supported();
 			if (!support.valid()) {
-				System.out.println("packing-service " + label + " rejected unsupported box=" + support.boxId()
+				System.out.println("packing-service " + label + context.fields()
+						+ " rejected unsupported box=" + support.boxId()
 						+ " position=" + support.x() + "," + support.y() + "," + support.z()
 						+ " ratio=" + support.supportRatio() + " reason=" + support.reason());
 			}
-			boolean valid = result.isSuccess() && support.valid()
-					&& BottomRuleSupport.isValid(result) && NoPressRuleSupport.isValid(result);
+			boolean bottomValid = result.isSuccess() && BottomRuleSupport.isValid(result);
+			boolean noPressValid = result.isSuccess() && NoPressRuleSupport.isValid(result);
+			boolean valid = result.isSuccess() && support.valid() && bottomValid && noPressValid;
 			boolean hasDoorSideRule = DoorSideRuleSupport.hasDoorSideRule(plan.boxItems());
+			boolean doorValid = true;
 			if (valid && hasDoorSideRule) {
 				DoorSideRuleSupport.mirrorToDoorSide(result);
-				valid = DoorSideRuleSupport.isValid(result);
+				doorValid = DoorSideRuleSupport.isValid(result);
+				valid = doorValid;
 			}
+			String reason = result.isSuccess()
+					? validationReason(support, bottomValid, noPressValid, doorValid)
+					: deadlineReason(deadline);
+			System.out.println("packing-service " + label + context.fields() + " success=" + valid
+					+ " packed=" + result.isSuccess() + " containerCount=" + result.size()
+					+ " placements=" + placements + " elapsedMs=" + elapsedMillis
+					+ " candidates=" + diagnostics.candidates() + " rejected=" + diagnostics.rejections()
+					+ " reason=" + reason);
 			return valid ? result : null;
 		} finally {
 			PackingSearchDiagnostics.finish();
@@ -468,6 +548,82 @@ class PackingEngine {
 
 	private static long totalLoadVolume(PackagerResult result) {
 		return result.getContainers().stream().mapToLong(c -> c.getLoadVolume()).sum();
+	}
+
+	private static long elapsedMillis(long startedNanos) {
+		return (System.nanoTime() - startedNanos) / 1_000_000L;
+	}
+
+	private static int unitCount(List<BoxItem> items) {
+		return items.stream().mapToInt(BoxItem::getCount).sum();
+	}
+
+	private static long totalVolume(List<BoxItem> items) {
+		return items.stream().mapToLong(BoxItem::getVolume).sum();
+	}
+
+	private static long totalWeight(List<BoxItem> items) {
+		return items.stream().mapToLong(BoxItem::getWeight).sum();
+	}
+
+	private static int houseBillCount(List<BoxItem> items) {
+		Set<String> ids = new HashSet<>();
+		for (BoxItem item : items) {
+			String id = item.getBox().getProperty(PackingMapper.PROP_HOUSE_BS_ID);
+			ids.add(id == null || id.isBlank() ? "<anonymous>" : id);
+		}
+		return ids.size();
+	}
+
+	private static String houseBillIds(List<BoxItem> items) {
+		Set<String> ids = new HashSet<>();
+		for (BoxItem item : items) {
+			String id = item.getBox().getProperty(PackingMapper.PROP_HOUSE_BS_ID);
+			ids.add(safe(id == null || id.isBlank() ? "<anonymous>" : id));
+		}
+		return String.join(",", ids.stream().sorted().toList());
+	}
+
+	private static double percent(long value, long maximum) {
+		if (maximum <= 0L) return 0.0;
+		return Math.round(value * 10_000.0 / maximum) / 100.0;
+	}
+
+	private static String safe(String value) {
+		if (value == null || value.isBlank()) return "unknown";
+		return value.replaceAll("\\s+", "_");
+	}
+
+	private static String deadlineReason(long deadline) {
+		return deadline > 0L && System.currentTimeMillis() >= deadline ? "deadline" : "no-placement";
+	}
+
+	private static String validationReason(PlacementSupport.Validation support,
+			boolean bottomValid, boolean noPressValid, boolean doorValid) {
+		if (!support.valid()) return "support-" + safe(support.reason());
+		if (!bottomValid) return "bottom-rule";
+		if (!noPressValid) return "no-press-rule";
+		if (!doorValid) return "door-side-rule";
+		return "none";
+	}
+
+	private static String terminationReason(int candidates, int attempted, int successful, long deadline) {
+		if (System.currentTimeMillis() >= deadline) return "deadline";
+		if (successful > 0 && attempted < candidates) return "better-solution-window";
+		if (attempted >= candidates) return "candidates-exhausted";
+		return "stopped";
+	}
+
+	private record LogContext(long searchId, int attempt, String source,
+			int containerIndex, int containerCount, String containerId) {
+		private static final LogContext NONE = new LogContext(0L, 0, "", 0, 0, "");
+
+		private String fields() {
+			if (searchId == 0L) return "";
+			return " searchId=" + searchId + " attempt=" + attempt + " source=" + safe(source)
+					+ " container=" + containerIndex + "/" + containerCount
+					+ " containerId=" + safe(containerId);
+		}
 	}
 
 	private static List<com.github.skjolber.packing.api.BoxItem> cloneBoxItems(List<com.github.skjolber.packing.api.BoxItem> items) {

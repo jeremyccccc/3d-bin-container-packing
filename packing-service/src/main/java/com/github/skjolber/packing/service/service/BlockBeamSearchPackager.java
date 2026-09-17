@@ -45,6 +45,10 @@ final class BlockBeamSearchPackager {
 	}
 
 	PackagerResult pack(Container sourceContainer, List<BoxItem> items, long deadlineMillis) {
+		return pack(sourceContainer, items, deadlineMillis, "");
+	}
+
+	PackagerResult pack(Container sourceContainer, List<BoxItem> items, long deadlineMillis, String logContext) {
 		long started = System.currentTimeMillis();
 		if (items.isEmpty()) return null;
 		Container container = sourceContainer.clone();
@@ -66,7 +70,7 @@ final class BlockBeamSearchPackager {
 			List<State> next = new ArrayList<>();
 			for (State state : beam) {
 				if (state.complete()) {
-					return result(container, state, started, expandedStates, generatedStates);
+					return result(container, state, started, expandedStates, generatedStates, logContext);
 				}
 				expandedStates++;
 				for (Move move : moves(state, catalog, container)) {
@@ -82,24 +86,24 @@ final class BlockBeamSearchPackager {
 			next = selectBeam(next, container);
 			for (State state : next) {
 				if (state.complete()) {
-					return result(container, state, started, expandedStates, generatedStates);
+					return result(container, state, started, expandedStates, generatedStates, logContext);
 				}
 			}
 			beam = next;
 		}
-		System.out.println("packing-service BLOCK-BEAM success=false elapsedMs="
+		System.out.println("packing-service BLOCK-BEAM" + logContext + " success=false elapsedMs="
 				+ (System.currentTimeMillis() - started) + " expanded=" + expandedStates
 				+ " generated=" + generatedStates + " blockTypes=" + catalog.size());
 		return null;
 	}
 
 	private PackagerResult result(Container container, State state, long started,
-			int expandedStates, int generatedStates) {
+			int expandedStates, int generatedStates, String logContext) {
 		List<Placement> placements = new ArrayList<>();
 		for (BlockPlacement placement : state.placements()) placement.expandInto(placements);
 		container.getStack().addAll(placements);
 		long elapsed = System.currentTimeMillis() - started;
-		System.out.println("packing-service BLOCK-BEAM success=true elapsedMs=" + elapsed
+		System.out.println("packing-service BLOCK-BEAM" + logContext + " success=true elapsedMs=" + elapsed
 				+ " expanded=" + expandedStates + " generated=" + generatedStates
 				+ " blocks=" + state.placements().size() + " placements=" + placements.size());
 		return new PackagerResult(List.of(container), elapsed, false);
