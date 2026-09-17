@@ -7,6 +7,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +25,7 @@ import com.github.skjolber.packing.service.dto.PackingResponse;
 
 @Service
 public class PackingService {
+	private static final Logger LOGGER = LoggerFactory.getLogger(PackingService.class);
 
 	private final PackingMapper mapper;
 	private final PackingEngine engine;
@@ -66,6 +69,8 @@ public class PackingService {
 			visualizationStore.save(resultId, request, response, result);
 			return response;
 		} catch (Exception e) {
+			LOGGER.error("Packing failed unexpectedly for masterBsId={}",
+					request != null ? request.masterBsId() : null, e);
 			return new PackingResponse(
 					request != null ? request.masterBsId() : null,
 					false,
