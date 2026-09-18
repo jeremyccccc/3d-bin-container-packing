@@ -25,6 +25,7 @@ final class WholeOrderAssignmentSolver {
 	private static final int GREEDY_SEEDS = 24;
 	private static final int MAX_CANDIDATES = 256;
 	private static final long SYSTEMATIC_NODE_LIMIT = 2_000_000L;
+	private final WholeOrderCandidateScorer candidateScorer = new WholeOrderCandidateScorer();
 
 	List<Candidate> candidates(PackingPlan plan) {
 		List<Container> containers = expandContainers(plan.containerItems());
@@ -39,7 +40,7 @@ final class WholeOrderAssignmentSolver {
 		for (int seed = 0; seed < GREEDY_SEEDS && candidates.size() < MAX_CANDIDATES; seed++) {
 			int[] assignment = greedy(groups, containers, seed);
 			if (assignment != null) {
-				addCandidate(candidates, signatures, groups, containers.size(), assignment, "greedy-" + seed);
+				addCandidate(candidates, signatures, groups, containers, assignment, "greedy-" + seed);
 				greedyAssignments.add(assignment);
 			}
 		}
@@ -50,7 +51,7 @@ final class WholeOrderAssignmentSolver {
 		if (candidates.size() < MAX_CANDIDATES) {
 			addSystematicCandidates(candidates, signatures, groups, containers);
 		}
-		return candidates;
+		return candidateScorer.rank(candidates, containers);
 	}
 
 	private static List<Container> expandContainers(List<ContainerItem> containerItems) {
@@ -146,7 +147,7 @@ final class WholeOrderAssignmentSolver {
 				}
 				int[] moved = base.clone();
 				moved[groupIndex] = to;
-				addCandidate(result, signatures, groups, containers.size(), moved, "local-move");
+				addCandidate(result, signatures, groups, containers, moved, "local-move");
 			}
 		}
 
@@ -170,7 +171,7 @@ final class WholeOrderAssignmentSolver {
 				int[] swapped = base.clone();
 				swapped[left] = rightContainer;
 				swapped[right] = leftContainer;
-				addCandidate(result, signatures, groups, containers.size(), swapped, "local-swap");
+				addCandidate(result, signatures, groups, containers, swapped, "local-swap");
 			}
 		}
 	}
@@ -208,22 +209,45 @@ final class WholeOrderAssignmentSolver {
 	}
 
 	private static void addCandidate(List<Candidate> result, Set<String> signatures,
-			List<OrderGroup> groups, int containerCount, int[] assignment, String source) {
-		String signature = Arrays.toString(assignment);
+			List<OrderGroup> groups, List<Container> containers, int[] assignment, String source) {
+		String signature = canonicalSignature(assignment, containers);
 		if (!signatures.add(signature)) {
 			return;
 		}
-		List<List<BoxItem>> itemsByContainer = new ArrayList<>(containerCount);
-		for (int i = 0; i < containerCount; i++) {
+		List<List<BoxItem>> itemsByContainer = new ArrayList<>(containers.size());
+		for (int i = 0; i < containers.size(); i++) {
 			itemsByContainer.add(new ArrayList<>());
 		}
 		for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
 			itemsByContainer.get(assignment[groupIndex]).addAll(groups.get(groupIndex).items());
 		}
-		result.add(new Candidate(itemsByContainer.stream().map(List::copyOf).toList(), source));
+		result.add(new Candidate(itemsByContainer.stream().map(List::copyOf).toList(), source,
+				result.size(), null));
 	}
 
-	record Candidate(List<List<BoxItem>> itemsByContainer, String source) {
+	private static String canonicalSignature(int[] assignment, List<Container> containers) {
+		Map<String, Map<Integer, Integer>> labelsByType = new LinkedHashMap<>();
+		StringBuilder signature = new StringBuilder(assignment.length * 12);
+		for (int containerIndex : assignment) {
+			String type = containerType(containers.get(containerIndex));
+			Map<Integer, Integer> labels = labelsByType.computeIfAbsent(type, ignored -> new LinkedHashMap<>());
+			int label = labels.computeIfAbsent(containerIndex, ignored -> labels.size());
+			signature.append(type).append('#').append(label).append(';');
+		}
+		return signature.toString();
+	}
+
+	private static String containerType(Container container) {
+		return container.getDx() + "x" + container.getDy() + "x" + container.getDz()
+				+ '/' + container.getLoadDx() + "x" + container.getLoadDy() + "x" + container.getLoadDz()
+				+ ':' + container.getEmptyWeight() + ':' + container.getMaxLoadWeight();
+	}
+
+	record Candidate(List<List<BoxItem>> itemsByContainer, String source, int generationIndex,
+			WholeOrderCandidateScorer.Score score) {
+		Candidate withScore(WholeOrderCandidateScorer.Score score) {
+			return new Candidate(itemsByContainer, source, generationIndex, score);
+		}
 	}
 
 	private record OrderGroup(String id, List<BoxItem> items, long volume, long weight, long largestBox) {
@@ -259,7 +283,7 @@ final class WholeOrderAssignmentSolver {
 				return;
 			}
 			if (depth == order.size()) {
-				addCandidate(result, signatures, groups, containers.size(), assignment.clone(), "systematic");
+				addCandidate(result, signatures, groups, containers, assignment.clone(), "systematic");
 				return;
 			}
 

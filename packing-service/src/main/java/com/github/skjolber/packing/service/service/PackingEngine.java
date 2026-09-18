@@ -109,6 +109,8 @@ class PackingEngine {
 			long candidateStarted = System.nanoTime();
 			System.out.println("packing-service whole-order candidate-start searchId=" + searchId
 					+ " attempt=" + attempted + " source=" + safe(candidate.source())
+					+ " generationIndex=" + (candidate.generationIndex() + 1)
+					+ candidate.score().logFields()
 					+ " containers=" + candidate.itemsByContainer().size());
 			List<Container> packedContainers = new ArrayList<>();
 			long duration = 0L;
@@ -116,7 +118,7 @@ class PackingEngine {
 			int containersAttempted = 0;
 			int failedContainer = -1;
 			String failureReason = "none";
-			for (int i = 0; i < physicalContainers.size(); i++) {
+			for (int i : candidate.score().validationOrder()) {
 				List<com.github.skjolber.packing.api.BoxItem> items = candidate.itemsByContainer().get(i);
 				if (items.isEmpty()) {
 					System.out.println("packing-service whole-order container-skip searchId=" + searchId
@@ -132,6 +134,8 @@ class PackingEngine {
 						i + 1, physicalContainers.size(), container.getId());
 				long containerStarted = System.nanoTime();
 				System.out.println("packing-service whole-order container-start" + context.fields()
+						+ " validationRank=" + containersAttempted
+						+ " predictedRisk=" + rounded(candidate.score().containerRisks().get(i))
 						+ " houseBills=" + houseBillCount(items) + " itemTypes=" + items.size()
 						+ " units=" + unitCount(items) + " volume=" + totalVolume(items)
 						+ " weight=" + totalWeight(items)
@@ -555,6 +559,10 @@ class PackingEngine {
 		if (current == null || candidate.size() < current.size()) {
 			return candidate;
 		}
+		if (candidate.size() == current.size()
+				&& totalContainerCapacity(candidate) < totalContainerCapacity(current)) {
+			return candidate;
+		}
 		if (candidate.size() == current.size() && totalLoadVolume(candidate) > totalLoadVolume(current)) {
 			return candidate;
 		}
@@ -575,6 +583,10 @@ class PackingEngine {
 
 	private static long totalLoadVolume(PackagerResult result) {
 		return result.getContainers().stream().mapToLong(c -> c.getLoadVolume()).sum();
+	}
+
+	private static long totalContainerCapacity(PackagerResult result) {
+		return result.getContainers().stream().mapToLong(Container::getMaxLoadVolume).sum();
 	}
 
 	private static long elapsedMillis(long startedNanos) {
@@ -614,6 +626,10 @@ class PackingEngine {
 	private static double percent(long value, long maximum) {
 		if (maximum <= 0L) return 0.0;
 		return Math.round(value * 10_000.0 / maximum) / 100.0;
+	}
+
+	private static double rounded(double value) {
+		return Math.round(value * 10_000.0) / 10_000.0;
 	}
 
 	private static String safe(String value) {
