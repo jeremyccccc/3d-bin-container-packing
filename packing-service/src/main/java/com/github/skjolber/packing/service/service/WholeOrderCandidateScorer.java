@@ -13,9 +13,15 @@ final class WholeOrderCandidateScorer {
 
 	List<WholeOrderAssignmentSolver.Candidate> rank(
 			List<WholeOrderAssignmentSolver.Candidate> candidates, List<Container> containers) {
+		return rank(candidates, containers, WholeOrderAssignmentStrategy.BALANCED, 0.85);
+	}
+
+	List<WholeOrderAssignmentSolver.Candidate> rank(
+			List<WholeOrderAssignmentSolver.Candidate> candidates, List<Container> containers,
+			WholeOrderAssignmentStrategy strategy, double targetFillRatio) {
 		List<WholeOrderAssignmentSolver.Candidate> ranked = new ArrayList<>(candidates.size());
 		for (WholeOrderAssignmentSolver.Candidate candidate : candidates) {
-			ranked.add(candidate.withScore(score(candidate, containers)));
+			ranked.add(candidate.withScore(score(candidate, containers, strategy, targetFillRatio)));
 		}
 		ranked.sort(Comparator
 				.comparingDouble((WholeOrderAssignmentSolver.Candidate candidate) -> candidate.score().total())
@@ -24,12 +30,18 @@ final class WholeOrderCandidateScorer {
 	}
 
 	Score score(WholeOrderAssignmentSolver.Candidate candidate, List<Container> containers) {
+		return score(candidate, containers, WholeOrderAssignmentStrategy.BALANCED, 0.85);
+	}
+
+	Score score(WholeOrderAssignmentSolver.Candidate candidate, List<Container> containers,
+			WholeOrderAssignmentStrategy strategy, double targetFillRatio) {
 		double worstRisk = 0.0;
 		double totalRisk = 0.0;
 		double totalFragmentation = 0.0;
 		double totalFitRisk = 0.0;
 		double totalRepeatRisk = 0.0;
 		double[] fills = new double[containers.size()];
+		int usedContainers = 0;
 		List<Double> containerRisks = new ArrayList<>(containers.size());
 		for (int i = 0; i < containers.size(); i++) {
 			ContainerRisk risk = containerRisk(candidate.itemsByContainer().get(i), containers.get(i));
@@ -40,14 +52,36 @@ final class WholeOrderCandidateScorer {
 			totalFitRisk += risk.fitRisk();
 			totalRepeatRisk += risk.repeatRisk();
 			fills[i] = risk.volumeFill();
+			if (!candidate.itemsByContainer().get(i).isEmpty()) usedContainers++;
 		}
 		double count = Math.max(1, containers.size());
 		double imbalance = standardDeviation(fills);
 		// The hardest cabinet dominates whether an assignment succeeds. Average
 		// difficulty and load imbalance break ties without hiding one bad cabinet.
-		double total = worstRisk * 100.0 + (totalRisk / count) * 10.0 + imbalance * 50.0;
+		double fillFirstPenalty = fillFirstPenalty(fills, targetFillRatio);
+		double total = strategy == WholeOrderAssignmentStrategy.FILL_FIRST
+				? fillFirstPenalty * 150.0
+						+ worstRisk * 100.0 + (totalRisk / count) * 10.0
+				: worstRisk * 100.0 + (totalRisk / count) * 10.0 + imbalance * 50.0;
 		return new Score(total, worstRisk, totalFragmentation / count,
-				totalFitRisk / count, totalRepeatRisk / count, imbalance, List.copyOf(containerRisks));
+				totalFitRisk / count, totalRepeatRisk / count, imbalance,
+				usedContainers, fillFirstPenalty, List.copyOf(containerRisks));
+	}
+
+	private static double fillFirstPenalty(double[] fills, double targetFillRatio) {
+		if (fills.length == 0) return 0.0;
+		// The final physical cabinet is the overflow/tail cabinet. Reward high,
+		// non-increasing fill in every cabinet before it and a small tail load.
+		double penalty = fills[fills.length - 1] * 0.25;
+		for (int i = 0; i < fills.length - 1; i++) {
+			if (fills[i] == 0.0) {
+				penalty += targetFillRatio + 2.0;
+				continue;
+			}
+			penalty += Math.max(0.0, targetFillRatio - fills[i]);
+			if (fills[i + 1] > fills[i]) penalty += (fills[i + 1] - fills[i]) * 2.0;
+		}
+		return penalty;
 	}
 
 	private static ContainerRisk containerRisk(List<BoxItem> items, Container container) {
@@ -112,7 +146,8 @@ final class WholeOrderCandidateScorer {
 	}
 
 	record Score(double total, double worstContainer, double fragmentation,
-			double fitRisk, double repeatRisk, double imbalance, List<Double> containerRisks) {
+			double fitRisk, double repeatRisk, double imbalance, int usedContainers,
+			double fillFirstPenalty, List<Double> containerRisks) {
 		List<Integer> validationOrder() {
 			List<Integer> order = new ArrayList<>(containerRisks.size());
 			for (int i = 0; i < containerRisks.size(); i++) order.add(i);
@@ -124,7 +159,9 @@ final class WholeOrderCandidateScorer {
 		String logFields() {
 			return " score=" + rounded(total) + " worst=" + rounded(worstContainer)
 					+ " fragmentation=" + rounded(fragmentation) + " fitRisk=" + rounded(fitRisk)
-					+ " repeatRisk=" + rounded(repeatRisk) + " imbalance=" + rounded(imbalance);
+					+ " repeatRisk=" + rounded(repeatRisk) + " imbalance=" + rounded(imbalance)
+					+ " usedContainers=" + usedContainers
+					+ " fillFirstPenalty=" + rounded(fillFirstPenalty);
 		}
 
 		private static double rounded(double value) {

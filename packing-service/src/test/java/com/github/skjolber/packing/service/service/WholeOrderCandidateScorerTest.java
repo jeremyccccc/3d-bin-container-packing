@@ -31,6 +31,24 @@ class WholeOrderCandidateScorerTest {
 	}
 
 	@Test
+	void defaultCandidateGenerationIsExactlyTheBalancedStrategy() throws Exception {
+		PackingPlan plan = plan();
+		WholeOrderAssignmentSolver solver = new WholeOrderAssignmentSolver();
+
+		List<WholeOrderAssignmentSolver.Candidate> defaults = solver.candidates(plan);
+		List<WholeOrderAssignmentSolver.Candidate> explicit = solver.candidates(
+				plan, WholeOrderAssignmentStrategy.BALANCED, 0.85);
+
+		assertThat(defaults).hasSameSizeAs(explicit);
+		for (int i = 0; i < defaults.size(); i++) {
+			assertThat(defaults.get(i).generationIndex()).isEqualTo(explicit.get(i).generationIndex());
+			assertThat(defaults.get(i).source()).isEqualTo(explicit.get(i).source());
+			assertThat(defaults.get(i).score().total()).isEqualTo(explicit.get(i).score().total());
+			assertThat(partition(defaults.get(i))).isEqualTo(partition(explicit.get(i)));
+		}
+	}
+
+	@Test
 	void validatesThePredictedHardestContainerFirst() throws Exception {
 		WholeOrderAssignmentSolver.Candidate candidate = new WholeOrderAssignmentSolver().candidates(plan()).get(0);
 		List<Integer> order = candidate.score().validationOrder();
@@ -50,6 +68,38 @@ class WholeOrderCandidateScorerTest {
 		for (WholeOrderAssignmentSolver.Candidate candidate : candidates) {
 			assertThat(partitions.add(partition(candidate))).isTrue();
 		}
+	}
+
+	@Test
+	void fillFirstUsesNoMoreContainersAndFrontLoadsTheCandidate() throws Exception {
+		PackingPlan plan = plan();
+		WholeOrderAssignmentSolver solver = new WholeOrderAssignmentSolver();
+
+		WholeOrderAssignmentSolver.Candidate balanced = solver.candidates(plan).get(0);
+		WholeOrderAssignmentSolver.Candidate fillFirst = solver.candidates(
+				plan, WholeOrderAssignmentStrategy.FILL_FIRST, 0.85).get(0);
+
+		assertThat(fillFirst.score().usedContainers())
+				.isLessThanOrEqualTo(balanced.score().usedContainers());
+		List<Long> volumes = fillFirst.itemsByContainer().stream()
+				.map(items -> items.stream().mapToLong(BoxItem::getVolume).sum())
+				.toList();
+		int lastUsed = -1;
+		for (int i = 0; i < volumes.size(); i++) if (volumes.get(i) > 0L) lastUsed = i;
+		for (int i = 0; i < lastUsed; i++) {
+			assertThat(volumes.get(i)).isPositive();
+		}
+	}
+
+	@Test
+	void parsesAssignmentStrategyConfiguration() {
+		assertThat(WholeOrderAssignmentStrategy.parse("balanced"))
+				.isEqualTo(WholeOrderAssignmentStrategy.BALANCED);
+		assertThat(WholeOrderAssignmentStrategy.parse("fill-first"))
+				.isEqualTo(WholeOrderAssignmentStrategy.FILL_FIRST);
+		org.assertj.core.api.Assertions.assertThatThrownBy(
+				() -> WholeOrderAssignmentStrategy.parse("unknown"))
+				.isInstanceOf(IllegalArgumentException.class);
 	}
 
 	private static String partition(WholeOrderAssignmentSolver.Candidate candidate) {

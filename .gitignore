@@ -1,6 +1,7 @@
 jmh/dependency-reduced-pom.xml
 visualizer/viewer/public/assets/containers.json
 .idea
+.vscode/
 .metadata
 *.iml
 .gradle
@@ -91,8 +92,8 @@ apm_modules/
 .agents
 
 # Local packing-service runtime and test artifacts
-/packing-results/
-/packing-request-logs/
+**/packing-results/
+**/packing-request-logs/
 /test-runs/
 *.log
 

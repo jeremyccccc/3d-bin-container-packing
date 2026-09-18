@@ -38,9 +38,12 @@ class PackingEngine {
 	private final PlacementSupport.Policy supportPolicy;
 	private final boolean diagnosticsEnabled;
 	private final boolean blockBeamOnly;
+	private final WholeOrderAssignmentStrategy assignmentStrategy;
+	private final double assignmentTargetFillRatio;
 
 	PackingEngine() {
-		this(PlacementSupport.DEFAULT_POLICY, false, false);
+		this(PlacementSupport.DEFAULT_POLICY, false, false,
+				WholeOrderAssignmentStrategy.BALANCED, 0.85);
 	}
 
 	@Autowired
@@ -50,23 +53,37 @@ class PackingEngine {
 			@Value("${packing.support.maximum-overhang-mm:20}") int maximumOverhangMillimeters,
 			@Value("${packing.support.maximum-overhang-ratio:0.05}") double maximumOverhangRatio,
 			@Value("${packing.diagnostics.enabled:false}") boolean diagnosticsEnabled,
-			@Value("${packing.block-beam-only:false}") boolean blockBeamOnly) {
+			@Value("${packing.block-beam-only:false}") boolean blockBeamOnly,
+			@Value("${packing.assignment.strategy:balanced}") String assignmentStrategy,
+			@Value("${packing.assignment.target-fill-ratio:0.85}") double assignmentTargetFillRatio) {
 		this(new PlacementSupport.Policy(minimumAreaRatio, requireCenterSupport,
-				maximumOverhangMillimeters, maximumOverhangRatio), diagnosticsEnabled, blockBeamOnly);
+				maximumOverhangMillimeters, maximumOverhangRatio), diagnosticsEnabled, blockBeamOnly,
+				WholeOrderAssignmentStrategy.parse(assignmentStrategy), assignmentTargetFillRatio);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy) {
-		this(supportPolicy, false, false);
+		this(supportPolicy, false, false, WholeOrderAssignmentStrategy.BALANCED, 0.85);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled) {
-		this(supportPolicy, diagnosticsEnabled, false);
+		this(supportPolicy, diagnosticsEnabled, false, WholeOrderAssignmentStrategy.BALANCED, 0.85);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly) {
+		this(supportPolicy, diagnosticsEnabled, blockBeamOnly,
+				WholeOrderAssignmentStrategy.BALANCED, 0.85);
+	}
+
+	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
+			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio) {
+		if (assignmentTargetFillRatio <= 0.0 || assignmentTargetFillRatio > 1.0) {
+			throw new IllegalArgumentException("packing.assignment.target-fill-ratio must be in (0, 1]");
+		}
 		this.supportPolicy = supportPolicy;
 		this.diagnosticsEnabled = diagnosticsEnabled;
 		this.blockBeamOnly = blockBeamOnly;
+		this.assignmentStrategy = assignmentStrategy;
+		this.assignmentTargetFillRatio = assignmentTargetFillRatio;
 	}
 
 	PackagerResult pack(PackingPlan plan) {
@@ -89,14 +106,17 @@ class PackingEngine {
 		long searchId = SEARCH_SEQUENCE.incrementAndGet();
 		List<ContainerItem> physicalContainers = expandContainerItems(plan.containerItems());
 		long candidateGenerationStarted = System.nanoTime();
-		List<WholeOrderAssignmentSolver.Candidate> candidates = assignmentSolver.candidates(plan);
+		List<WholeOrderAssignmentSolver.Candidate> candidates = assignmentSolver.candidates(
+				plan, assignmentStrategy, assignmentTargetFillRatio);
 		long candidateGenerationMillis = elapsedMillis(candidateGenerationStarted);
 		WholeOrderPackingCache cache = new WholeOrderPackingCache();
 		System.out.println("packing-service whole-order search-start searchId=" + searchId
 				+ " candidates=" + candidates.size() + " candidateGenerationMs=" + candidateGenerationMillis
 				+ " containers=" + physicalContainers.size() + " houseBills=" + houseBillCount(plan.boxItems())
 				+ " itemTypes=" + plan.boxItems().size() + " units=" + unitCount(plan.boxItems())
-				+ " deadlineMs=" + WHOLE_ORDER_SEARCH_MILLIS);
+				+ " deadlineMs=" + WHOLE_ORDER_SEARCH_MILLIS
+				+ " assignmentStrategy=" + assignmentStrategy.propertyValue()
+				+ " targetFillRatio=" + assignmentTargetFillRatio);
 		PackagerResult best = null;
 		int attempted = 0;
 		int successful = 0;
@@ -192,7 +212,9 @@ class PackingEngine {
 					System.out.println("packing-service whole-order success source=" + candidate.source()
 							+ " attempt=" + attempted + " containerCount=" + packed.size());
 					best = better(best, packed);
-					if (successful == 1) {
+					if (assignmentStrategy == WholeOrderAssignmentStrategy.FILL_FIRST) {
+						stopAt = System.currentTimeMillis();
+					} else if (successful == 1) {
 						stopAt = Math.min(deadline, System.currentTimeMillis() + BETTER_SOLUTION_SEARCH_MILLIS);
 					}
 				} else {
@@ -215,7 +237,8 @@ class PackingEngine {
 				+ " cacheSuccessHits=" + cacheStats.successHits()
 				+ " cacheFailureHits=" + cacheStats.failureHits() + " cacheSize=" + cacheStats.size()
 				+ " cacheSavedMs=" + cacheStats.savedMillis()
-				+ " termination=" + terminationReason(candidates.size(), attempted, successful, deadline));
+				+ " termination=" + terminationReason(candidates.size(), attempted, successful,
+						deadline, assignmentStrategy));
 		return best;
 	}
 
@@ -317,16 +340,24 @@ class PackingEngine {
 	private PackagerResult tryBlockBeamSearch(PackingPlan plan, List<ContainerItem> containers,
 			String label, long deadline, LogContext context) {
 		if (containers.size() != 1 || totalContainerCount(containers) != 1) return null;
-		long localDeadline = System.currentTimeMillis() + BLOCK_BEAM_SEARCH_MILLIS;
+		BlockBeamSearchPackager packager = new BlockBeamSearchPackager();
+		BlockBeamSearchPackager.SearchSession session = packager.newSession(
+				containers.get(0).getContainer(), plan.boxItems(), context.fields());
+		if (session == null) return null;
+		long remainingMillis = Math.max(0L,
+				BLOCK_BEAM_SEARCH_MILLIS - session.progress().activeMillis());
+		long localDeadline = System.currentTimeMillis() + remainingMillis;
 		if (deadline > 0L) localDeadline = Math.min(localDeadline, deadline);
 		long started = System.nanoTime();
-		PackagerResult result = new BlockBeamSearchPackager().pack(
-				containers.get(0).getContainer(), plan.boxItems(), localDeadline, context.fields());
+		BlockBeamSearchPackager.SearchProgress progress = session.advance(localDeadline);
+		PackagerResult result = progress.result();
 		long elapsedMillis = (System.nanoTime() - started) / 1_000_000L;
 		if (result == null || !result.isSuccess()) {
 			System.out.println("packing-service " + label + context.fields()
 					+ " success=false elapsedMs=" + elapsedMillis
-					+ " reason=" + (System.currentTimeMillis() >= localDeadline ? "deadline" : "search-exhausted"));
+					+ " reason=" + (progress.exhausted() ? "search-exhausted" : "deadline")
+					+ " cumulativeMs=" + progress.activeMillis()
+					+ " completion=" + rounded(progress.completionRatio()));
 			return null;
 		}
 		PlacementSupport.Validation support = PlacementSupport.validate(result, supportPolicy);
@@ -650,9 +681,13 @@ class PackingEngine {
 		return "none";
 	}
 
-	private static String terminationReason(int candidates, int attempted, int successful, long deadline) {
+	private static String terminationReason(int candidates, int attempted, int successful, long deadline,
+			WholeOrderAssignmentStrategy strategy) {
 		if (System.currentTimeMillis() >= deadline) return "deadline";
-		if (successful > 0 && attempted < candidates) return "better-solution-window";
+		if (successful > 0 && attempted < candidates) {
+			return strategy == WholeOrderAssignmentStrategy.FILL_FIRST
+					? "first-success" : "better-solution-window";
+		}
 		if (attempted >= candidates) return "candidates-exhausted";
 		return "stopped";
 	}

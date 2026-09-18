@@ -41,6 +41,24 @@ class BlockBeamSearchPackagerTest {
 	}
 
 	@Test
+	void resumesAPausedSearchInsteadOfStartingOver() {
+		Container container = container(200, 200, 200);
+		Box box = Box.newBuilder().withId("cube").withSize(100, 100, 100)
+				.withWeight(1).withRotate3D().build();
+		BlockBeamSearchPackager packager = new BlockBeamSearchPackager(12, 10);
+		BlockBeamSearchPackager.SearchSession session = packager.newSession(
+				container, List.of(new BoxItem(box, 8)), " test=resume");
+
+		BlockBeamSearchPackager.SearchProgress paused = session.advance(System.currentTimeMillis());
+		BlockBeamSearchPackager.SearchProgress completed = session.advance(0L);
+
+		assertThat(paused.complete()).isFalse();
+		assertThat(paused.exhausted()).isFalse();
+		assertThat(completed.complete()).isTrue();
+		assertThat(completed.result().get(0).getStack().getPlacements()).hasSize(8);
+	}
+
+	@Test
 	void detectsWhenARemainingCriticalItemLosesItsLastUsableSpace() {
 		Box critical = Box.newBuilder().withId("critical").withSize(1330, 940, 1350)
 				.withWeight(1).build();

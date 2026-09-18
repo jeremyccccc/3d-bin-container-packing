@@ -49,64 +49,121 @@ final class BlockBeamSearchPackager {
 	}
 
 	PackagerResult pack(Container sourceContainer, List<BoxItem> items, long deadlineMillis, String logContext) {
-		long started = System.currentTimeMillis();
+		SearchSession session = newSession(sourceContainer, items, logContext);
+		return session == null ? null : session.advance(deadlineMillis).result();
+	}
+
+	SearchSession newSession(Container sourceContainer, List<BoxItem> items, String logContext) {
 		if (items.isEmpty()) return null;
 		Container container = sourceContainer.clone();
 		List<Block> catalog = generateBlocks(container, items);
 		if (catalog.isEmpty()) return null;
-
-		int[] initialRemaining = items.stream().mapToInt(BoxItem::getCount).toArray();
-		List<Space> initialSpaces = List.of(
-				new Space(0, 0, 0, container.getLoadDx(), container.getLoadDy(), container.getLoadDz()));
-		State initial = new State(initialRemaining, initialSpaces, List.of(), 0L, 0, 0, 0,
-				feasibility(initialRemaining, initialSpaces, items));
-		List<State> beam = List.of(initial);
-		Set<String> visited = new HashSet<>();
-		visited.add(initial.key());
-		int expandedStates = 0;
-		int generatedStates = 0;
-
-		while (!beam.isEmpty() && !expired(deadlineMillis)) {
-			List<State> next = new ArrayList<>();
-			for (State state : beam) {
-				if (state.complete()) {
-					return result(container, state, started, expandedStates, generatedStates, logContext);
-				}
-				expandedStates++;
-				for (Move move : moves(state, catalog, container)) {
-					State child = apply(state, move, container, items);
-					generatedStates++;
-					// Once no current maximal space can accommodate a remaining item,
-					// later placements can only shrink those spaces. Keep that dead end
-					// out of the beam before it displaces a viable alternative.
-					if (child.feasibility().strandedTypes() == 0 && visited.add(child.key())) next.add(child);
-				}
-			}
-			if (next.isEmpty()) break;
-			next = selectBeam(next, container);
-			for (State state : next) {
-				if (state.complete()) {
-					return result(container, state, started, expandedStates, generatedStates, logContext);
-				}
-			}
-			beam = next;
-		}
-		System.out.println("packing-service BLOCK-BEAM" + logContext + " success=false elapsedMs="
-				+ (System.currentTimeMillis() - started) + " expanded=" + expandedStates
-				+ " generated=" + generatedStates + " blockTypes=" + catalog.size());
-		return null;
+		return new SearchSession(container, List.copyOf(items), catalog, logContext);
 	}
 
-	private PackagerResult result(Container container, State state, long started,
+	private PackagerResult result(Container container, State state, long elapsedMillis,
 			int expandedStates, int generatedStates, String logContext) {
 		List<Placement> placements = new ArrayList<>();
 		for (BlockPlacement placement : state.placements()) placement.expandInto(placements);
 		container.getStack().addAll(placements);
-		long elapsed = System.currentTimeMillis() - started;
-		System.out.println("packing-service BLOCK-BEAM" + logContext + " success=true elapsedMs=" + elapsed
+		System.out.println("packing-service BLOCK-BEAM" + logContext + " success=true elapsedMs=" + elapsedMillis
 				+ " expanded=" + expandedStates + " generated=" + generatedStates
 				+ " blocks=" + state.placements().size() + " placements=" + placements.size());
-		return new PackagerResult(List.of(container), elapsed, false);
+		return new PackagerResult(List.of(container), elapsedMillis, false);
+	}
+
+	final class SearchSession {
+		private final Container container;
+		private final List<BoxItem> items;
+		private final List<Block> catalog;
+		private final String logContext;
+		private final Set<String> visited = new HashSet<>();
+		private List<State> beam;
+		private int expandedStates;
+		private int generatedStates;
+		private int maximumPackedUnits;
+		private final int totalUnits;
+		private long activeMillis;
+		private boolean exhausted;
+		private PackagerResult completed;
+
+		private SearchSession(Container container, List<BoxItem> items, List<Block> catalog,
+				String logContext) {
+			this.container = container;
+			this.items = items;
+			this.catalog = catalog;
+			this.logContext = logContext;
+			int[] remaining = items.stream().mapToInt(BoxItem::getCount).toArray();
+			this.totalUnits = Arrays.stream(remaining).sum();
+			List<Space> spaces = List.of(
+					new Space(0, 0, 0, container.getLoadDx(), container.getLoadDy(), container.getLoadDz()));
+			State initial = new State(remaining, spaces, List.of(), 0L, 0, 0, 0,
+					feasibility(remaining, spaces, items));
+			this.beam = List.of(initial);
+			this.visited.add(initial.key());
+		}
+
+		SearchProgress advance(long deadlineMillis) {
+			if (completed != null || exhausted) return progress();
+			long callStarted = System.nanoTime();
+			while (!beam.isEmpty() && !expired(deadlineMillis)) {
+				List<State> next = new ArrayList<>();
+				for (State state : beam) {
+					if (state.complete()) return complete(state, callStarted);
+					expandedStates++;
+					for (Move move : moves(state, catalog, container)) {
+						State child = apply(state, move, container, items);
+						generatedStates++;
+						maximumPackedUnits = Math.max(maximumPackedUnits, packedUnits(child));
+						if (child.feasibility().strandedTypes() == 0 && visited.add(child.key())) next.add(child);
+					}
+				}
+				if (next.isEmpty()) {
+					exhausted = true;
+					beam = List.of();
+					break;
+				}
+				next = selectBeam(next, container);
+				for (State state : next) {
+					if (state.complete()) return complete(state, callStarted);
+				}
+				beam = next;
+			}
+			activeMillis += elapsedMillis(callStarted);
+			System.out.println("packing-service BLOCK-BEAM" + logContext
+					+ " success=false status=" + (exhausted ? "exhausted" : "paused")
+					+ " elapsedMs=" + activeMillis + " expanded=" + expandedStates
+					+ " generated=" + generatedStates + " blockTypes=" + catalog.size()
+					+ " packedUnits=" + maximumPackedUnits + "/" + totalUnits);
+			return progress();
+		}
+
+		private SearchProgress complete(State state, long callStarted) {
+			activeMillis += elapsedMillis(callStarted);
+			maximumPackedUnits = totalUnits;
+			completed = result(container, state, activeMillis, expandedStates, generatedStates, logContext);
+			return progress();
+		}
+
+		SearchProgress progress() {
+			return new SearchProgress(completed, exhausted, maximumPackedUnits, totalUnits,
+					expandedStates, generatedStates, activeMillis);
+		}
+
+		private int packedUnits(State state) {
+			return totalUnits - Arrays.stream(state.remaining()).sum();
+		}
+	}
+
+	record SearchProgress(PackagerResult result, boolean exhausted, int packedUnits,
+			int totalUnits, int expandedStates, int generatedStates, long activeMillis) {
+		boolean complete() {
+			return result != null && result.isSuccess();
+		}
+
+		double completionRatio() {
+			return totalUnits == 0 ? 0.0 : packedUnits / (double) totalUnits;
+		}
 	}
 
 	private List<Move> moves(State state, List<Block> catalog, Container container) {
@@ -383,6 +440,10 @@ final class BlockBeamSearchPackager {
 
 	private static boolean expired(long deadlineMillis) {
 		return deadlineMillis > 0L && System.currentTimeMillis() >= deadlineMillis;
+	}
+
+	private static long elapsedMillis(long startedNanos) {
+		return (System.nanoTime() - startedNanos) / 1_000_000L;
 	}
 
 	private record Block(int itemIndex, Box box, BoxStackValue orientation,

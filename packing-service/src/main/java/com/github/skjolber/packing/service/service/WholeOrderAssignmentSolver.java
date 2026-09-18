@@ -28,6 +28,11 @@ final class WholeOrderAssignmentSolver {
 	private final WholeOrderCandidateScorer candidateScorer = new WholeOrderCandidateScorer();
 
 	List<Candidate> candidates(PackingPlan plan) {
+		return candidates(plan, WholeOrderAssignmentStrategy.BALANCED, 0.85);
+	}
+
+	List<Candidate> candidates(PackingPlan plan, WholeOrderAssignmentStrategy strategy,
+			double targetFillRatio) {
 		List<Container> containers = expandContainers(plan.containerItems());
 		List<OrderGroup> groups = group(plan.boxItems());
 		if (containers.size() < 2 || groups.isEmpty()) {
@@ -38,7 +43,9 @@ final class WholeOrderAssignmentSolver {
 		Set<String> signatures = new HashSet<>();
 		List<int[]> greedyAssignments = new ArrayList<>();
 		for (int seed = 0; seed < GREEDY_SEEDS && candidates.size() < MAX_CANDIDATES; seed++) {
-			int[] assignment = greedy(groups, containers, seed);
+			int[] assignment = strategy == WholeOrderAssignmentStrategy.FILL_FIRST
+					? greedyFillFirst(groups, containers, seed, targetFillRatio)
+					: greedy(groups, containers, seed);
 			if (assignment != null) {
 				addCandidate(candidates, signatures, groups, containers, assignment, "greedy-" + seed);
 				greedyAssignments.add(assignment);
@@ -51,7 +58,7 @@ final class WholeOrderAssignmentSolver {
 		if (candidates.size() < MAX_CANDIDATES) {
 			addSystematicCandidates(candidates, signatures, groups, containers);
 		}
-		return candidateScorer.rank(candidates, containers);
+		return candidateScorer.rank(candidates, containers, strategy, targetFillRatio);
 	}
 
 	private static List<Container> expandContainers(List<ContainerItem> containerItems) {
@@ -126,6 +133,67 @@ final class WholeOrderAssignmentSolver {
 			if (best < 0) {
 				return null;
 			}
+			assignment[groupIndex] = best;
+			usedVolume[best] += group.volume();
+			usedWeight[best] += group.weight();
+		}
+		return assignment;
+	}
+
+	private static int[] greedyFillFirst(List<OrderGroup> groups, List<Container> containers,
+			int seed, double configuredTargetFillRatio) {
+		Random random = new Random(31L * seed + 17L);
+		// Search from the requested aggressive target down through progressively
+		// safer profiles. This prevents the mode from spending the entire deadline
+		// on nearly identical over-filled cabinets.
+		double relaxation = (seed % 6) * 0.03;
+		double targetFillRatio = Math.max(0.60, Math.min(0.98,
+				configuredTargetFillRatio - relaxation + (random.nextDouble() - 0.5) * 0.02));
+		List<Integer> order = new ArrayList<>();
+		double[] priority = new double[groups.size()];
+		for (int i = 0; i < groups.size(); i++) {
+			order.add(i);
+			priority[i] = groups.get(i).volume() * (0.90 + random.nextDouble() * 0.20);
+		}
+		order.sort(Comparator.<Integer>comparingDouble(index -> -priority[index])
+				.thenComparingLong(index -> -groups.get(index).largestBox()));
+
+		long[] usedVolume = new long[containers.size()];
+		long[] usedWeight = new long[containers.size()];
+		int[] assignment = new int[groups.size()];
+		Arrays.fill(assignment, -1);
+		for (int groupIndex : order) {
+			OrderGroup group = groups.get(groupIndex);
+			int best = -1;
+			double bestScore = Double.POSITIVE_INFINITY;
+			for (int containerIndex = 0; containerIndex < containers.size(); containerIndex++) {
+				Container container = containers.get(containerIndex);
+				if (!fits(group, container, usedVolume[containerIndex], usedWeight[containerIndex])) continue;
+				double volumeFill = (usedVolume[containerIndex] + group.volume())
+						/ (double) container.getMaxLoadVolume();
+				double weightFill = container.getMaxLoadWeight() == 0 ? 0.0
+						: (usedWeight[containerIndex] + group.weight())
+								/ (double) container.getMaxLoadWeight();
+				boolean open = usedVolume[containerIndex] > 0L || usedWeight[containerIndex] > 0L;
+				double score;
+				if (volumeFill <= targetFillRatio && weightFill <= targetFillRatio) {
+					// Prefer an already-open cabinet and leave as little room as possible
+					// below the target. Container index makes front loading deterministic.
+					score = (open ? 0.0 : 10.0)
+							+ (targetFillRatio - volumeFill)
+							+ 0.15 * Math.max(0.0, targetFillRatio - weightFill)
+							+ containerIndex * 0.0001;
+				} else {
+					score = 100.0 + Math.max(0.0, volumeFill - targetFillRatio) * 10.0
+							+ Math.max(0.0, weightFill - targetFillRatio)
+							+ (open ? 0.0 : 10.0) + containerIndex * 0.0001;
+				}
+				if (score < bestScore) {
+					bestScore = score;
+					best = containerIndex;
+				}
+			}
+			if (best < 0) return null;
 			assignment[groupIndex] = best;
 			usedVolume[best] += group.volume();
 			usedWeight[best] += group.weight();
