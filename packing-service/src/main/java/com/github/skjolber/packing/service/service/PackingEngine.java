@@ -91,6 +91,7 @@ class PackingEngine {
 		long candidateGenerationStarted = System.nanoTime();
 		List<WholeOrderAssignmentSolver.Candidate> candidates = assignmentSolver.candidates(plan);
 		long candidateGenerationMillis = elapsedMillis(candidateGenerationStarted);
+		WholeOrderPackingCache cache = new WholeOrderPackingCache();
 		System.out.println("packing-service whole-order search-start searchId=" + searchId
 				+ " candidates=" + candidates.size() + " candidateGenerationMs=" + candidateGenerationMillis
 				+ " containers=" + physicalContainers.size() + " houseBills=" + houseBillCount(plan.boxItems())
@@ -143,11 +144,32 @@ class PackingEngine {
 						items,
 						plan.cargoLines(),
 						plan.warnings());
-				PackagerResult packed = packFlat(containerPlan, deadline, context);
+				WholeOrderPackingCache.Lookup cached = cache.lookup(container, items);
+				PackagerResult packed;
+				if (cached.hit()) {
+					System.out.println("packing-service whole-order cache-hit" + context.fields()
+							+ " status=" + (cached.failed() ? "failure" : "success")
+							+ " savedMs=" + cached.savedMillis());
+					packed = cached.result();
+				} else {
+					System.out.println("packing-service whole-order cache-miss" + context.fields());
+					long packingStarted = System.nanoTime();
+					packed = packFlat(containerPlan, deadline, context);
+					long computationMillis = elapsedMillis(packingStarted);
+					if (packed != null && packed.isSuccess() && packed.size() == 1) {
+						cache.putSuccess(container, items, packed, computationMillis);
+					} else {
+						// Leave globally interrupted work uncached. A later candidate might reach
+						// the same load with enough time to complete its algorithm sequence.
+						boolean completed = System.currentTimeMillis() + 1_000L < deadline;
+						cache.putFailure(container, items, computationMillis, completed);
+					}
+				}
 				if (packed == null || !packed.isSuccess() || packed.size() != 1) {
 					success = false;
 					failedContainer = i + 1;
-					failureReason = System.currentTimeMillis() >= deadline ? "deadline" : "no-algorithm-succeeded";
+					failureReason = cached.hit() && cached.failed() ? "cached-failure"
+							: System.currentTimeMillis() >= deadline ? "deadline" : "no-algorithm-succeeded";
 					System.out.println("packing-service whole-order container-end" + context.fields()
 							+ " success=false elapsedMs=" + elapsedMillis(containerStarted)
 							+ " reason=" + failureReason);
@@ -180,10 +202,15 @@ class PackingEngine {
 					+ " failedContainer=" + failedContainer + " reason=" + failureReason
 					+ " elapsedMs=" + elapsedMillis(candidateStarted));
 		}
+		WholeOrderPackingCache.Stats cacheStats = cache.stats();
 		System.out.println("packing-service whole-order candidates=" + candidates.size()
 				+ " searchId=" + searchId + " attempted=" + attempted + " successful=" + successful
 				+ " success=" + (best != null) + " candidateGenerationMs=" + candidateGenerationMillis
 				+ " elapsedMs=" + elapsedMillis(searchStarted)
+				+ " cacheHits=" + cacheStats.hits() + " cacheMisses=" + cacheStats.misses()
+				+ " cacheSuccessHits=" + cacheStats.successHits()
+				+ " cacheFailureHits=" + cacheStats.failureHits() + " cacheSize=" + cacheStats.size()
+				+ " cacheSavedMs=" + cacheStats.savedMillis()
 				+ " termination=" + terminationReason(candidates.size(), attempted, successful, deadline));
 		return best;
 	}
