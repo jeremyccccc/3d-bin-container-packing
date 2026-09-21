@@ -10,6 +10,8 @@ import com.github.skjolber.packing.api.Box;
 import com.github.skjolber.packing.api.BoxItem;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.PackagerResult;
+import com.github.skjolber.packing.api.Placement;
+import com.github.skjolber.packing.ep.points3d.DefaultPoint3D;
 
 class BlockBeamSearchPackagerTest {
 
@@ -38,6 +40,26 @@ class BlockBeamSearchPackagerTest {
 				.pack(container, List.of(new BoxItem(box, 2)), 0L);
 
 		assertThat(result).isNull();
+	}
+
+	@Test
+	void packsARegularBlockOnTopOfAFixedLayout() {
+		Container container = container(1200, 1000, 1200);
+		Placement platform = placement("platform", 0, 0, 0, 1100, 900, 100);
+		Box box = Box.newBuilder().withId("316901").withSize(500, 390, 250)
+				.withWeight(1).withRotate3D().build();
+
+		PackagerResult result = new BlockBeamSearchPackager(32, 32)
+				.pack(container, List.of(new BoxItem(box, 12)), List.of(platform), 0L, " test=fixed");
+
+		assertThat(result).isNotNull();
+		assertThat(result.isSuccess()).isTrue();
+		assertThat(result.get(0).getStack().getPlacements()).hasSize(13);
+		assertThat(result.get(0).getStack().getPlacements().get(0)).isSameAs(platform);
+		assertThat(PlacementSupport.validate(result, PlacementSupport.DEFAULT_POLICY).valid()).isTrue();
+		assertThat(result.get(0).getStack().getPlacements().stream()
+				.filter(placement -> placement != platform)
+				.noneMatch(platform::intersects)).isTrue();
 	}
 
 	@Test
@@ -107,5 +129,11 @@ class BlockBeamSearchPackagerTest {
 	private static Container container(int dx, int dy, int dz) {
 		return Container.newBuilder().withId("container").withSize(dx, dy, dz)
 				.withMaxLoadWeight(10000).build();
+	}
+
+	private static Placement placement(String id, int x, int y, int z, int dx, int dy, int dz) {
+		Box box = Box.newBuilder().withId(id).withSize(dx, dy, dz).withWeight(1).build();
+		return new Placement(box.getStackValues()[0],
+				new DefaultPoint3D(x, y, z, x + dx - 1, y + dy - 1, z + dz - 1));
 	}
 }

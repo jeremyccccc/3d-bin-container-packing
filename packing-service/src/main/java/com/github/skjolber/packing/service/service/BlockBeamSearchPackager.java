@@ -18,6 +18,8 @@ import com.github.skjolber.packing.api.BoxStackValue;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.PackagerResult;
 import com.github.skjolber.packing.api.Placement;
+import com.github.skjolber.packing.api.point.Point;
+import com.github.skjolber.packing.ep.points3d.DefaultPointCalculator3D;
 
 /**
  * Bounded search over homogeneous blocks and a maximal-space cover whose bases
@@ -34,14 +36,24 @@ final class BlockBeamSearchPackager {
 
 	private final int beamWidth;
 	private final int branching;
+	private final PlacementSupport.Policy supportPolicy;
 
 	BlockBeamSearchPackager() {
-		this(DEFAULT_BEAM_WIDTH, DEFAULT_BRANCHING);
+		this(DEFAULT_BEAM_WIDTH, DEFAULT_BRANCHING, PlacementSupport.DEFAULT_POLICY);
 	}
 
 	BlockBeamSearchPackager(int beamWidth, int branching) {
+		this(beamWidth, branching, PlacementSupport.DEFAULT_POLICY);
+	}
+
+	BlockBeamSearchPackager(PlacementSupport.Policy supportPolicy) {
+		this(DEFAULT_BEAM_WIDTH, DEFAULT_BRANCHING, supportPolicy);
+	}
+
+	BlockBeamSearchPackager(int beamWidth, int branching, PlacementSupport.Policy supportPolicy) {
 		this.beamWidth = beamWidth;
 		this.branching = branching;
+		this.supportPolicy = supportPolicy;
 	}
 
 	PackagerResult pack(Container sourceContainer, List<BoxItem> items, long deadlineMillis) {
@@ -53,18 +65,32 @@ final class BlockBeamSearchPackager {
 		return session == null ? null : session.advance(deadlineMillis).result();
 	}
 
-	SearchSession newSession(Container sourceContainer, List<BoxItem> items, String logContext) {
-		if (items.isEmpty()) return null;
-		Container container = sourceContainer.clone();
-		List<Block> catalog = generateBlocks(container, items);
-		if (catalog.isEmpty()) return null;
-		return new SearchSession(container, List.copyOf(items), catalog, logContext);
+	PackagerResult pack(Container sourceContainer, List<BoxItem> items, List<Placement> fixedPlacements,
+			long deadlineMillis, String logContext) {
+		SearchSession session = newSession(sourceContainer, items, fixedPlacements, logContext);
+		return session == null ? null : session.advance(deadlineMillis).result();
 	}
 
-	private PackagerResult result(Container container, State state, long elapsedMillis,
+	SearchSession newSession(Container sourceContainer, List<BoxItem> items, String logContext) {
+		return newSession(sourceContainer, items, List.of(), logContext);
+	}
+
+	SearchSession newSession(Container sourceContainer, List<BoxItem> items,
+			List<Placement> fixedPlacements, String logContext) {
+		if (items.isEmpty()) return null;
+		Container container = sourceContainer.clone();
+		List<Placement> fixed = List.copyOf(fixedPlacements);
+		validateFixedPlacements(container, fixed);
+		List<Block> catalog = generateBlocks(container, items);
+		if (catalog.isEmpty()) return null;
+		return new SearchSession(container, List.copyOf(items), catalog, fixed, logContext);
+	}
+
+	private PackagerResult result(Container container, State state, List<Placement> fixedPlacements, long elapsedMillis,
 			int expandedStates, int generatedStates, String logContext) {
 		List<Placement> placements = new ArrayList<>();
 		for (BlockPlacement placement : state.placements()) placement.expandInto(placements);
+		container.getStack().addAll(fixedPlacements);
 		container.getStack().addAll(placements);
 		System.out.println("packing-service BLOCK-BEAM" + logContext + " success=true elapsedMs=" + elapsedMillis
 				+ " expanded=" + expandedStates + " generated=" + generatedStates
@@ -76,6 +102,7 @@ final class BlockBeamSearchPackager {
 		private final Container container;
 		private final List<BoxItem> items;
 		private final List<Block> catalog;
+		private final List<Placement> fixedPlacements;
 		private final String logContext;
 		private final Set<String> visited = new HashSet<>();
 		private List<State> beam;
@@ -88,16 +115,23 @@ final class BlockBeamSearchPackager {
 		private PackagerResult completed;
 
 		private SearchSession(Container container, List<BoxItem> items, List<Block> catalog,
-				String logContext) {
+				List<Placement> fixedPlacements, String logContext) {
 			this.container = container;
 			this.items = items;
 			this.catalog = catalog;
+			this.fixedPlacements = fixedPlacements;
 			this.logContext = logContext;
 			int[] remaining = items.stream().mapToInt(BoxItem::getCount).toArray();
 			this.totalUnits = Arrays.stream(remaining).sum();
-			List<Space> spaces = List.of(
-					new Space(0, 0, 0, container.getLoadDx(), container.getLoadDy(), container.getLoadDz()));
-			State initial = new State(remaining, spaces, List.of(), 0L, 0, 0, 0,
+			List<Space> spaces = initialSpaces(container, fixedPlacements);
+			if (spaces.isEmpty()) {
+				this.beam = List.of();
+				this.exhausted = true;
+				return;
+			}
+			long fixedVolume = fixedPlacements.stream().mapToLong(p -> p.getStackValue().getVolume()).sum();
+			int fixedWeight = fixedWeight(fixedPlacements);
+			State initial = new State(remaining, spaces, List.of(), fixedVolume, fixedWeight, 0, 0,
 					feasibility(remaining, spaces, items));
 			this.beam = List.of(initial);
 			this.visited.add(initial.key());
@@ -111,7 +145,7 @@ final class BlockBeamSearchPackager {
 				for (State state : beam) {
 					if (state.complete()) return complete(state, callStarted);
 					expandedStates++;
-					for (Move move : moves(state, catalog, container)) {
+					for (Move move : moves(state, catalog, container, fixedPlacements)) {
 						State child = apply(state, move, container, items);
 						generatedStates++;
 						maximumPackedUnits = Math.max(maximumPackedUnits, packedUnits(child));
@@ -141,7 +175,7 @@ final class BlockBeamSearchPackager {
 		private SearchProgress complete(State state, long callStarted) {
 			activeMillis += elapsedMillis(callStarted);
 			maximumPackedUnits = totalUnits;
-			completed = result(container, state, activeMillis, expandedStates, generatedStates, logContext);
+			completed = result(container, state, fixedPlacements, activeMillis, expandedStates, generatedStates, logContext);
 			return progress();
 		}
 
@@ -166,7 +200,8 @@ final class BlockBeamSearchPackager {
 		}
 	}
 
-	private List<Move> moves(State state, List<Block> catalog, Container container) {
+	private List<Move> moves(State state, List<Block> catalog, Container container,
+			List<Placement> fixedPlacements) {
 		PriorityQueue<Move> best = new PriorityQueue<>(Comparator.comparingDouble(Move::rank));
 		Map<Integer, Move> bestByItem = new HashMap<>();
 		for (int spaceIndex = 0; spaceIndex < state.spaces().size(); spaceIndex++) {
@@ -174,6 +209,8 @@ final class BlockBeamSearchPackager {
 			for (Block block : catalog) {
 				if (state.remaining()[block.itemIndex()] < block.units() || !space.fits(block)
 						|| state.intersects(space.x(), space.y(), space.z(), block)) continue;
+				if (!isSupported(space.x(), space.y(), space.z(), block,
+						fixedPlacements, state.placements(), supportPolicy)) continue;
 				if ((long) state.weight() + block.weight() > container.getMaxLoadWeight()) continue;
 				double rank = moveRank(space, block, container);
 				Move move = new Move(spaceIndex, block, false, rank);
@@ -197,6 +234,159 @@ final class BlockBeamSearchPackager {
 			best.poll();
 			best.add(move);
 		}
+	}
+
+	private static void validateFixedPlacements(Container container, List<Placement> placements) {
+		for (int i = 0; i < placements.size(); i++) {
+			Placement placement = placements.get(i);
+			if (placement.getAbsoluteX() < 0 || placement.getAbsoluteY() < 0 || placement.getAbsoluteZ() < 0
+					|| placement.getAbsoluteEndX() >= container.getLoadDx()
+					|| placement.getAbsoluteEndY() >= container.getLoadDy()
+					|| placement.getAbsoluteEndZ() >= container.getLoadDz()) {
+				throw new IllegalArgumentException("Fixed placement is outside container: " + placement);
+			}
+			for (int j = 0; j < i; j++) {
+				if (intersects(placement, placements.get(j))) {
+					throw new IllegalArgumentException("Fixed placements overlap at indexes " + j + " and " + i);
+				}
+			}
+		}
+	}
+
+	private static boolean intersects(Placement a, Placement b) {
+		return a.getAbsoluteX() <= b.getAbsoluteEndX() && b.getAbsoluteX() <= a.getAbsoluteEndX()
+				&& a.getAbsoluteY() <= b.getAbsoluteEndY() && b.getAbsoluteY() <= a.getAbsoluteEndY()
+				&& a.getAbsoluteZ() <= b.getAbsoluteEndZ() && b.getAbsoluteZ() <= a.getAbsoluteEndZ();
+	}
+
+	private static int fixedWeight(List<Placement> placements) {
+		long weight = 0L;
+		for (Placement placement : placements) weight += placement.getBox().getWeight();
+		return (int) Math.min(Integer.MAX_VALUE, weight);
+	}
+
+	private static List<Space> initialSpaces(Container container, List<Placement> fixedPlacements) {
+		if (fixedPlacements.isEmpty()) {
+			return List.of(new Space(0, 0, 0,
+					container.getLoadDx(), container.getLoadDy(), container.getLoadDz()));
+		}
+		List<Placement> ordered = fixedPlacements.stream()
+				.sorted(Comparator.comparingInt(Placement::getAbsoluteZ)
+						.thenComparingInt(Placement::getAbsoluteY)
+						.thenComparingInt(Placement::getAbsoluteX))
+				.toList();
+		DefaultPointCalculator3D calculator = new DefaultPointCalculator3D(false, ordered.size() + 1);
+		calculator.clearToSize(container.getLoadDx(), container.getLoadDy(), container.getLoadDz());
+		for (int i = 0; i < ordered.size(); i++) {
+			if (!calculator.addObstacle(ordered.get(i))) {
+				throw new IllegalArgumentException("Unable to add fixed placement obstacle #" + i);
+			}
+		}
+		List<Space> spaces = new ArrayList<>();
+		for (Point point : calculator.getAll()) {
+			addSpace(spaces, point.getMinX(), point.getMinY(), point.getMinZ(),
+					point.getDx(), point.getDy(), point.getDz());
+		}
+		return normalize(spaces);
+	}
+
+	private static boolean isSupported(int x, int y, int z, Block block,
+			List<Placement> fixedPlacements, List<BlockPlacement> placedBlocks,
+			PlacementSupport.Policy policy) {
+		if (z == 0) return true;
+		BoxStackValue unit = block.orientation();
+		for (int ix = 0; ix < block.nx(); ix++) {
+			for (int iy = 0; iy < block.ny(); iy++) {
+				int unitX = x + ix * unit.getDx();
+				int unitY = y + iy * unit.getDy();
+				if (!isFootprintSupported(unitX, unitY, z, unit.getDx(), unit.getDy(),
+						fixedPlacements, placedBlocks, policy)) return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean isFootprintSupported(int x, int y, int z, int dx, int dy,
+			List<Placement> fixedPlacements, List<BlockPlacement> placedBlocks,
+			PlacementSupport.Policy policy) {
+		int endX = x + dx;
+		int endY = y + dy;
+		List<SupportRectangle> supports = new ArrayList<>();
+		for (Placement placement : fixedPlacements) {
+			if (placement.getAbsoluteEndZ() + 1 != z) continue;
+			addSupport(supports, x, y, endX, endY,
+					placement.getAbsoluteX(), placement.getAbsoluteY(),
+					placement.getAbsoluteEndX() + 1, placement.getAbsoluteEndY() + 1);
+		}
+		for (BlockPlacement placement : placedBlocks) {
+			if (placement.z() + placement.block().dz() != z) continue;
+			addSupport(supports, x, y, endX, endY,
+					placement.x(), placement.y(),
+					placement.x() + placement.block().dx(), placement.y() + placement.block().dy());
+		}
+		long area = (long) dx * dy;
+		long supportedArea = coveredArea(supports);
+		if (supportedArea / (double) area + 1.0e-12 < policy.minimumAreaRatio()) return false;
+		double centerX = x + dx / 2.0;
+		double centerY = y + dy / 2.0;
+		if (policy.requireCenterSupport()
+				&& supports.stream().noneMatch(rectangle -> rectangle.contains(centerX, centerY))) return false;
+		int supportMinX = supports.stream().mapToInt(SupportRectangle::minX).min().orElse(endX);
+		int supportMaxX = supports.stream().mapToInt(SupportRectangle::maxX).max().orElse(x);
+		int supportMinY = supports.stream().mapToInt(SupportRectangle::minY).min().orElse(endY);
+		int supportMaxY = supports.stream().mapToInt(SupportRectangle::maxY).max().orElse(y);
+		int allowedX = policy.maximumOverhang(dx);
+		int allowedY = policy.maximumOverhang(dy);
+		return supportMinX - x <= allowedX && endX - supportMaxX <= allowedX
+				&& supportMinY - y <= allowedY && endY - supportMaxY <= allowedY;
+	}
+
+	private static void addSupport(List<SupportRectangle> supports,
+			int x, int y, int endX, int endY,
+			int supportX, int supportY, int supportEndX, int supportEndY) {
+		int minX = Math.max(x, supportX);
+		int minY = Math.max(y, supportY);
+		int maxX = Math.min(endX, supportEndX);
+		int maxY = Math.min(endY, supportEndY);
+		if (minX < maxX && minY < maxY) supports.add(new SupportRectangle(minX, minY, maxX, maxY));
+	}
+
+	private static long coveredArea(List<SupportRectangle> rectangles) {
+		if (rectangles.isEmpty()) return 0L;
+		List<Integer> xCoordinates = rectangles.stream()
+				.flatMap(rectangle -> List.of(rectangle.minX(), rectangle.maxX()).stream())
+				.distinct().sorted().toList();
+		long area = 0L;
+		for (int i = 0; i < xCoordinates.size() - 1; i++) {
+			int minX = xCoordinates.get(i);
+			int maxX = xCoordinates.get(i + 1);
+			List<SupportInterval> intervals = rectangles.stream()
+					.filter(rectangle -> rectangle.minX() <= minX && rectangle.maxX() >= maxX)
+					.map(rectangle -> new SupportInterval(rectangle.minY(), rectangle.maxY()))
+					.sorted(Comparator.comparingInt(SupportInterval::min)
+							.thenComparingInt(SupportInterval::max))
+					.toList();
+			area += (long) (maxX - minX) * coveredLength(intervals);
+		}
+		return area;
+	}
+
+	private static long coveredLength(List<SupportInterval> intervals) {
+		if (intervals.isEmpty()) return 0L;
+		long length = 0L;
+		int min = intervals.get(0).min();
+		int max = intervals.get(0).max();
+		for (int i = 1; i < intervals.size(); i++) {
+			SupportInterval interval = intervals.get(i);
+			if (interval.min() > max) {
+				length += max - min;
+				min = interval.min();
+				max = interval.max();
+			} else {
+				max = Math.max(max, interval.max());
+			}
+		}
+		return length + max - min;
 	}
 
 	private static double moveRank(Space space, Block block, Container container) {
@@ -470,6 +660,15 @@ final class BlockBeamSearchPackager {
 			return spaceIndex + ":" + block.itemIndex() + ":" + block.orientation().getIndex()
 					+ ":" + block.nx() + ":" + block.ny() + ":" + block.nz();
 		}
+	}
+
+	private record SupportRectangle(int minX, int minY, int maxX, int maxY) {
+		boolean contains(double x, double y) {
+			return x >= minX && x < maxX && y >= minY && y < maxY;
+		}
+	}
+
+	private record SupportInterval(int min, int max) {
 	}
 
 	record Feasibility(int strandedTypes, int scarceTypes,

@@ -30,7 +30,6 @@ import com.github.skjolber.packing.packer.plain.PlainPlacementComparator;
 @Component
 class PackingEngine {
 	private static final long WHOLE_ORDER_SEARCH_MILLIS = 180_000L;
-	private static final long BETTER_SOLUTION_SEARCH_MILLIS = 15_000L;
 	private static final long BLOCK_BEAM_SEARCH_MILLIS = 30_000L;
 	private static final AtomicLong SEARCH_SEQUENCE = new AtomicLong();
 
@@ -40,10 +39,14 @@ class PackingEngine {
 	private final boolean blockBeamOnly;
 	private final WholeOrderAssignmentStrategy assignmentStrategy;
 	private final double assignmentTargetFillRatio;
+	private final boolean tailCompactionEnabled;
+	private final long tailCompactionSearchMillis;
+	private final int tailCompactionBeamWidth;
+	private final int tailCompactionBranching;
 
 	PackingEngine() {
 		this(PlacementSupport.DEFAULT_POLICY, false, false,
-				WholeOrderAssignmentStrategy.BALANCED, 0.85);
+				WholeOrderAssignmentStrategy.BALANCED, 0.85, false, 30_000L, 32, 32);
 	}
 
 	@Autowired
@@ -55,35 +58,58 @@ class PackingEngine {
 			@Value("${packing.diagnostics.enabled:false}") boolean diagnosticsEnabled,
 			@Value("${packing.block-beam-only:false}") boolean blockBeamOnly,
 			@Value("${packing.assignment.strategy:balanced}") String assignmentStrategy,
-			@Value("${packing.assignment.target-fill-ratio:0.85}") double assignmentTargetFillRatio) {
+			@Value("${packing.assignment.target-fill-ratio:0.85}") double assignmentTargetFillRatio,
+			@Value("${packing.tail-compaction.enabled:false}") boolean tailCompactionEnabled,
+			@Value("${packing.tail-compaction.search-millis:30000}") long tailCompactionSearchMillis,
+			@Value("${packing.tail-compaction.beam-width:32}") int tailCompactionBeamWidth,
+			@Value("${packing.tail-compaction.branching:32}") int tailCompactionBranching) {
 		this(new PlacementSupport.Policy(minimumAreaRatio, requireCenterSupport,
 				maximumOverhangMillimeters, maximumOverhangRatio), diagnosticsEnabled, blockBeamOnly,
-				WholeOrderAssignmentStrategy.parse(assignmentStrategy), assignmentTargetFillRatio);
+				WholeOrderAssignmentStrategy.parse(assignmentStrategy), assignmentTargetFillRatio,
+				tailCompactionEnabled, tailCompactionSearchMillis,
+				tailCompactionBeamWidth, tailCompactionBranching);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy) {
-		this(supportPolicy, false, false, WholeOrderAssignmentStrategy.BALANCED, 0.85);
+		this(supportPolicy, false, false, WholeOrderAssignmentStrategy.BALANCED, 0.85,
+				false, 30_000L, 32, 32);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled) {
-		this(supportPolicy, diagnosticsEnabled, false, WholeOrderAssignmentStrategy.BALANCED, 0.85);
+		this(supportPolicy, diagnosticsEnabled, false, WholeOrderAssignmentStrategy.BALANCED, 0.85,
+				false, 30_000L, 32, 32);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly) {
 		this(supportPolicy, diagnosticsEnabled, blockBeamOnly,
-				WholeOrderAssignmentStrategy.BALANCED, 0.85);
+				WholeOrderAssignmentStrategy.BALANCED, 0.85, false, 30_000L, 32, 32);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
 			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio) {
+		this(supportPolicy, diagnosticsEnabled, blockBeamOnly, assignmentStrategy, assignmentTargetFillRatio,
+				false, 30_000L, 32, 32);
+	}
+
+	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
+			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio,
+			boolean tailCompactionEnabled, long tailCompactionSearchMillis,
+			int tailCompactionBeamWidth, int tailCompactionBranching) {
 		if (assignmentTargetFillRatio <= 0.0 || assignmentTargetFillRatio > 1.0) {
 			throw new IllegalArgumentException("packing.assignment.target-fill-ratio must be in (0, 1]");
+		}
+		if (tailCompactionSearchMillis <= 0L || tailCompactionBeamWidth <= 0 || tailCompactionBranching <= 0) {
+			throw new IllegalArgumentException("tail compaction search settings must be positive");
 		}
 		this.supportPolicy = supportPolicy;
 		this.diagnosticsEnabled = diagnosticsEnabled;
 		this.blockBeamOnly = blockBeamOnly;
 		this.assignmentStrategy = assignmentStrategy;
 		this.assignmentTargetFillRatio = assignmentTargetFillRatio;
+		this.tailCompactionEnabled = tailCompactionEnabled;
+		this.tailCompactionSearchMillis = tailCompactionSearchMillis;
+		this.tailCompactionBeamWidth = tailCompactionBeamWidth;
+		this.tailCompactionBranching = tailCompactionBranching;
 	}
 
 	PackagerResult pack(PackingPlan plan) {
@@ -212,11 +238,7 @@ class PackingEngine {
 					System.out.println("packing-service whole-order success source=" + candidate.source()
 							+ " attempt=" + attempted + " containerCount=" + packed.size());
 					best = better(best, packed);
-					if (assignmentStrategy == WholeOrderAssignmentStrategy.FILL_FIRST) {
-						stopAt = System.currentTimeMillis();
-					} else if (successful == 1) {
-						stopAt = Math.min(deadline, System.currentTimeMillis() + BETTER_SOLUTION_SEARCH_MILLIS);
-					}
+					stopAt = System.currentTimeMillis();
 				} else {
 					success = false;
 					failureReason = "split-house-bill";
@@ -237,8 +259,12 @@ class PackingEngine {
 				+ " cacheSuccessHits=" + cacheStats.successHits()
 				+ " cacheFailureHits=" + cacheStats.failureHits() + " cacheSize=" + cacheStats.size()
 				+ " cacheSavedMs=" + cacheStats.savedMillis()
-				+ " termination=" + terminationReason(candidates.size(), attempted, successful,
-						deadline, assignmentStrategy));
+				+ " termination=" + terminationReason(candidates.size(), attempted, successful, deadline));
+		if (tailCompactionEnabled && best != null && best.size() > 1) {
+			long compactionDeadline = System.currentTimeMillis() + tailCompactionSearchMillis;
+			best = new TailContainerCompactor(supportPolicy,
+					tailCompactionBeamWidth, tailCompactionBranching).compact(best, compactionDeadline);
+		}
 		return best;
 	}
 
@@ -681,13 +707,9 @@ class PackingEngine {
 		return "none";
 	}
 
-	private static String terminationReason(int candidates, int attempted, int successful, long deadline,
-			WholeOrderAssignmentStrategy strategy) {
+	private static String terminationReason(int candidates, int attempted, int successful, long deadline) {
 		if (System.currentTimeMillis() >= deadline) return "deadline";
-		if (successful > 0 && attempted < candidates) {
-			return strategy == WholeOrderAssignmentStrategy.FILL_FIRST
-					? "first-success" : "better-solution-window";
-		}
+		if (successful > 0 && attempted < candidates) return "first-success";
 		if (attempted >= candidates) return "candidates-exhausted";
 		return "stopped";
 	}

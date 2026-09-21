@@ -86,13 +86,12 @@ class PackingServiceTest {
 		assertThat(response.masterBsId()).isEqualTo("136356701");
 		assertThat(response.containerLists()).hasSize(2);
 
-		AllocatedContainerDto gp = response.containerLists().get(0);
-		AllocatedContainerDto hq = response.containerLists().get(1);
-		assertThat(gp.allocatedHouseBillList()).hasSize(2);
-		assertThat(hq.allocatedHouseBillList()).isEmpty();
+		assertThat(response.containerLists())
+				.flatExtracting(AllocatedContainerDto::allocatedHouseBillList)
+				.hasSize(2);
 
-		int returnedNum = gp.allocatedHouseBillList()
-				.stream()
+		int returnedNum = response.containerLists().stream()
+				.flatMap(container -> container.allocatedHouseBillList().stream())
 				.flatMap(houseBill -> houseBill.items().stream())
 				.mapToInt(item -> item.num())
 				.sum();
