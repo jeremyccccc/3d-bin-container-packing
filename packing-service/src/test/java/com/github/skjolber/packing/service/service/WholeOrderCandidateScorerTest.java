@@ -102,6 +102,24 @@ class WholeOrderCandidateScorerTest {
 				.isInstanceOf(IllegalArgumentException.class);
 	}
 
+	@Test
+	void createsTheFormalWholeOrderCandidateForOneContainer() throws Exception {
+		PackingPlan multiple = plan();
+		PackingPlan single = new PackingPlan(
+				List.of(multiple.requestedContainers().get(0)),
+				List.of(multiple.containerItems().get(0)),
+				multiple.boxItems(), multiple.cargoLines(), multiple.warnings());
+
+		List<WholeOrderAssignmentSolver.Candidate> candidates = new WholeOrderAssignmentSolver()
+				.candidates(single, WholeOrderAssignmentStrategy.FILL_FIRST, 0.85);
+
+		assertThat(candidates).singleElement().satisfies(candidate -> {
+			assertThat(candidate.source()).isEqualTo("single-container");
+			assertThat(candidate.itemsByContainer()).hasSize(1);
+			assertThat(candidate.itemsByContainer().get(0)).hasSameSizeAs(single.boxItems());
+		});
+	}
+
 	private static String partition(WholeOrderAssignmentSolver.Candidate candidate) {
 		List<String> containers = new ArrayList<>();
 		for (List<BoxItem> items : candidate.itemsByContainer()) {

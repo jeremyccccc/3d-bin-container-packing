@@ -55,24 +55,28 @@ class PackingMapper {
 	private static List<ContainerItem> toContainerItems(List<ContainerDto> input, List<String> warnings) {
 		List<ContainerItem> items = new ArrayList<>();
 		for (ContainerDto container : nullToEmpty(input)) {
-			ContainerSpec spec = spec(container);
-			if (spec == null) {
+			ContainerItem mapped = toContainerItem(container);
+			if (mapped == null) {
 				warnings.add("UNSUPPORTED_CONTAINER_SKIPPED id=" + container.id() + " size=" + container.size() + " type=" + container.type());
 				continue;
 			}
-
-			Container mapped = Container
-					.newBuilder()
-					.withId(container.id())
-					.withDescription(container.size() + container.type().toUpperCase(Locale.ROOT))
-					.withSize(scaleCm(spec.lengthCm()), scaleCm(spec.widthCm()), scaleCm(spec.heightCm()))
-					.withEmptyWeight(0)
-					.withMaxLoadWeight(spec.maxLoadKg() * WEIGHT_SCALE)
-					.build();
-
-			items.add(new ContainerItem(mapped, 1));
+			items.add(mapped);
 		}
 		return items;
+	}
+
+	static ContainerItem toContainerItem(ContainerDto container) {
+		ContainerSpec spec = spec(container);
+		if (spec == null) return null;
+		Container mapped = Container
+				.newBuilder()
+				.withId(container.id())
+				.withDescription(container.size() + container.type().toUpperCase(Locale.ROOT))
+				.withSize(scaleCm(spec.lengthCm()), scaleCm(spec.widthCm()), scaleCm(spec.heightCm()))
+				.withEmptyWeight(0)
+				.withMaxLoadWeight(spec.maxLoadKg() * WEIGHT_SCALE)
+				.build();
+		return new ContainerItem(mapped, 1);
 	}
 
 	private static ContainerSpec spec(ContainerDto container) {

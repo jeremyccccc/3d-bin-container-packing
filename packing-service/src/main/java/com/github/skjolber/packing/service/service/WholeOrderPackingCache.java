@@ -23,7 +23,7 @@ final class WholeOrderPackingCache {
 	private int failureHits;
 	private long savedMillis;
 
-	Lookup lookup(Container target, List<BoxItem> items) {
+	synchronized Lookup lookup(Container target, List<BoxItem> items) {
 		Entry entry = entries.get(key(target, items));
 		if (entry == null) {
 			misses++;
@@ -39,17 +39,17 @@ final class WholeOrderPackingCache {
 		return Lookup.success(rebind(entry.result(), target.getId()), entry.computationMillis());
 	}
 
-	void putSuccess(Container container, List<BoxItem> items, PackagerResult result, long computationMillis) {
+	synchronized void putSuccess(Container container, List<BoxItem> items, PackagerResult result, long computationMillis) {
 		entries.putIfAbsent(key(container, items), new Entry(result, computationMillis));
 	}
 
-	void putFailure(Container container, List<BoxItem> items, long computationMillis, boolean completed) {
+	synchronized void putFailure(Container container, List<BoxItem> items, long computationMillis, boolean completed) {
 		if (completed) {
 			entries.putIfAbsent(key(container, items), new Entry(null, computationMillis));
 		}
 	}
 
-	Stats stats() {
+	synchronized Stats stats() {
 		return new Stats(hits, misses, successHits, failureHits, entries.size(), savedMillis);
 	}
 

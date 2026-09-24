@@ -7,6 +7,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,11 +32,16 @@ import com.github.skjolber.packing.packer.laff.FastLargestAreaFitFirstPackager;
 import com.github.skjolber.packing.packer.laff.LargestAreaFitFirstPackager;
 import com.github.skjolber.packing.packer.plain.PlainPackager;
 import com.github.skjolber.packing.packer.plain.PlainPlacementComparator;
+import com.github.skjolber.packing.service.dto.ContainerDto;
 
 @Component
 class PackingEngine {
 	private static final long WHOLE_ORDER_SEARCH_MILLIS = 180_000L;
 	private static final long BLOCK_BEAM_SEARCH_MILLIS = 30_000L;
+	private static final long BLOCK_BEAM_QUICK_SEARCH_MILLIS = 2_000L;
+	private static final int BLOCK_BEAM_INTENSIVE_WIDTH = 128;
+	private static final int BLOCK_BEAM_INTENSIVE_BRANCHING = 64;
+	private static final int BLOCK_BEAM_INTENSIVE_PROFILES = 2;
 	private static final AtomicLong SEARCH_SEQUENCE = new AtomicLong();
 
 	private final WholeOrderAssignmentSolver assignmentSolver = new WholeOrderAssignmentSolver();
@@ -43,10 +54,11 @@ class PackingEngine {
 	private final long tailCompactionSearchMillis;
 	private final int tailCompactionBeamWidth;
 	private final int tailCompactionBranching;
+	private final int wholeOrderParallelism;
 
 	PackingEngine() {
 		this(PlacementSupport.DEFAULT_POLICY, false, false,
-				WholeOrderAssignmentStrategy.BALANCED, 0.85, false, 30_000L, 32, 32);
+				WholeOrderAssignmentStrategy.BALANCED, 0.85, false, 30_000L, 32, 32, 1);
 	}
 
 	@Autowired
@@ -56,50 +68,54 @@ class PackingEngine {
 			@Value("${packing.support.maximum-overhang-mm:20}") int maximumOverhangMillimeters,
 			@Value("${packing.support.maximum-overhang-ratio:0.05}") double maximumOverhangRatio,
 			@Value("${packing.diagnostics.enabled:false}") boolean diagnosticsEnabled,
-			@Value("${packing.block-beam-only:false}") boolean blockBeamOnly,
-			@Value("${packing.assignment.strategy:balanced}") String assignmentStrategy,
+			@Value("${packing.block-beam-only:true}") boolean blockBeamOnly,
+			@Value("${packing.assignment.strategy:fill-first}") String assignmentStrategy,
 			@Value("${packing.assignment.target-fill-ratio:0.85}") double assignmentTargetFillRatio,
-			@Value("${packing.tail-compaction.enabled:false}") boolean tailCompactionEnabled,
-			@Value("${packing.tail-compaction.search-millis:30000}") long tailCompactionSearchMillis,
+			@Value("${packing.tail-compaction.enabled:true}") boolean tailCompactionEnabled,
+			@Value("${packing.tail-compaction.search-millis:60000}") long tailCompactionSearchMillis,
 			@Value("${packing.tail-compaction.beam-width:32}") int tailCompactionBeamWidth,
-			@Value("${packing.tail-compaction.branching:32}") int tailCompactionBranching) {
+			@Value("${packing.tail-compaction.branching:32}") int tailCompactionBranching,
+			@Value("${packing.whole-order.parallelism:1}") int wholeOrderParallelism) {
 		this(new PlacementSupport.Policy(minimumAreaRatio, requireCenterSupport,
 				maximumOverhangMillimeters, maximumOverhangRatio), diagnosticsEnabled, blockBeamOnly,
 				WholeOrderAssignmentStrategy.parse(assignmentStrategy), assignmentTargetFillRatio,
 				tailCompactionEnabled, tailCompactionSearchMillis,
-				tailCompactionBeamWidth, tailCompactionBranching);
+				tailCompactionBeamWidth, tailCompactionBranching, wholeOrderParallelism);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy) {
 		this(supportPolicy, false, false, WholeOrderAssignmentStrategy.BALANCED, 0.85,
-				false, 30_000L, 32, 32);
+				false, 30_000L, 32, 32, 1);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled) {
 		this(supportPolicy, diagnosticsEnabled, false, WholeOrderAssignmentStrategy.BALANCED, 0.85,
-				false, 30_000L, 32, 32);
+				false, 30_000L, 32, 32, 1);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly) {
 		this(supportPolicy, diagnosticsEnabled, blockBeamOnly,
-				WholeOrderAssignmentStrategy.BALANCED, 0.85, false, 30_000L, 32, 32);
+				WholeOrderAssignmentStrategy.BALANCED, 0.85, false, 30_000L, 32, 32, 1);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
 			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio) {
 		this(supportPolicy, diagnosticsEnabled, blockBeamOnly, assignmentStrategy, assignmentTargetFillRatio,
-				false, 30_000L, 32, 32);
+				false, 30_000L, 32, 32, 1);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
 			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio,
 			boolean tailCompactionEnabled, long tailCompactionSearchMillis,
-			int tailCompactionBeamWidth, int tailCompactionBranching) {
+			int tailCompactionBeamWidth, int tailCompactionBranching, int wholeOrderParallelism) {
 		if (assignmentTargetFillRatio <= 0.0 || assignmentTargetFillRatio > 1.0) {
 			throw new IllegalArgumentException("packing.assignment.target-fill-ratio must be in (0, 1]");
 		}
 		if (tailCompactionSearchMillis <= 0L || tailCompactionBeamWidth <= 0 || tailCompactionBranching <= 0) {
 			throw new IllegalArgumentException("tail compaction search settings must be positive");
+		}
+		if (wholeOrderParallelism <= 0 || wholeOrderParallelism > 16) {
+			throw new IllegalArgumentException("packing.whole-order.parallelism must be in [1, 16]");
 		}
 		this.supportPolicy = supportPolicy;
 		this.diagnosticsEnabled = diagnosticsEnabled;
@@ -110,23 +126,69 @@ class PackingEngine {
 		this.tailCompactionSearchMillis = tailCompactionSearchMillis;
 		this.tailCompactionBeamWidth = tailCompactionBeamWidth;
 		this.tailCompactionBranching = tailCompactionBranching;
+		this.wholeOrderParallelism = wholeOrderParallelism;
 	}
 
 	PackagerResult pack(PackingPlan plan) {
-		if (plan.containerItems().isEmpty() || plan.boxItems().isEmpty()) {
-			return null;
-		}
-
-		// A one-container request already satisfies the whole-order rule. For
-		// multiple physical containers, assign complete house bills first instead
-		// of spending time on a flat result which is likely to split them.
-		if (totalContainerCount(plan.containerItems()) == 1) {
-			return packFlat(plan, 0L);
-		}
-		return packWholeOrders(plan);
+		PackingOutcome outcome = packOutcome(plan);
+		return outcome.targetAchieved() ? outcome.result() : null;
 	}
 
-	private PackagerResult packWholeOrders(PackingPlan plan) {
+	PackingOutcome packOutcome(PackingPlan plan) {
+		if (plan.containerItems().isEmpty() || plan.boxItems().isEmpty()) {
+			return new PackingOutcome(plan, null, false, false,
+					totalContainerCount(plan.containerItems()));
+		}
+		int targetContainerCount = totalContainerCount(plan.containerItems());
+
+		// Use the same production path for every target count, including one
+		// container: fill-first assignment, Balanced Block Beam, original/swapped
+		// orientations and first complete solution. This avoids the four-profile
+		// quality search, gap filling and LNS used by the standalone flat-search
+		// mode.
+		PackagerResult targetResult = packWholeOrders(plan, false, targetContainerCount);
+		if (targetResult != null && targetResult.isSuccess()) {
+			return new PackingOutcome(plan, targetResult, true, false, targetContainerCount);
+		}
+
+		PackingPlan fallbackPlan = withAutomatic40Hq(plan);
+		System.out.println("packing-service automatic-fallback start targetContainers="
+				+ targetContainerCount + " fallbackContainers=" + (targetContainerCount + 1)
+				+ " addedContainerId="
+				+ fallbackPlan.requestedContainers().get(fallbackPlan.requestedContainers().size() - 1).id());
+		PackagerResult fallbackResult = packWholeOrders(fallbackPlan, true, targetContainerCount);
+		boolean achieved = fallbackResult != null && fallbackResult.isSuccess()
+				&& fallbackResult.size() <= targetContainerCount;
+		System.out.println("packing-service automatic-fallback success=" + achieved
+				+ " baselineSuccess=" + (fallbackResult != null && fallbackResult.isSuccess())
+				+ " finalContainers=" + (fallbackResult == null ? 0 : fallbackResult.size())
+				+ " targetContainers=" + targetContainerCount);
+		return new PackingOutcome(fallbackPlan, fallbackResult, achieved, true, targetContainerCount);
+	}
+
+	static PackingPlan withAutomatic40Hq(PackingPlan plan) {
+		Set<String> ids = new HashSet<>();
+		for (ContainerDto container : plan.requestedContainers()) ids.add(container.id());
+		int targetContainerCount = totalContainerCount(plan.containerItems());
+		String baseId = "AUTO-40HQ-" + (targetContainerCount + 1);
+		String id = baseId;
+		for (int suffix = 2; ids.contains(id); suffix++) id = baseId + "-" + suffix;
+		ContainerDto automatic = new ContainerDto(id, 40, "HQ");
+		ContainerItem mapped = PackingMapper.toContainerItem(automatic);
+		if (mapped == null) throw new IllegalStateException("无法创建自动40HQ柜型");
+
+		List<ContainerDto> requested = new ArrayList<>(plan.requestedContainers());
+		requested.add(automatic);
+		List<ContainerItem> containers = new ArrayList<>(plan.containerItems());
+		containers.add(mapped);
+		List<String> warnings = new ArrayList<>(plan.warnings());
+		warnings.add("AUTO_40HQ_FALLBACK targetContainers=" + targetContainerCount
+				+ " addedContainerId=" + id);
+		return new PackingPlan(List.copyOf(requested), List.copyOf(containers), plan.boxItems(),
+				plan.cargoLines(), List.copyOf(warnings));
+	}
+
+	private PackagerResult packWholeOrders(PackingPlan plan, boolean compactTail, int compactionTargetCount) {
 		long searchStarted = System.nanoTime();
 		long deadline = System.currentTimeMillis() + WHOLE_ORDER_SEARCH_MILLIS;
 		long searchId = SEARCH_SEQUENCE.incrementAndGet();
@@ -142,113 +204,59 @@ class PackingEngine {
 				+ " itemTypes=" + plan.boxItems().size() + " units=" + unitCount(plan.boxItems())
 				+ " deadlineMs=" + WHOLE_ORDER_SEARCH_MILLIS
 				+ " assignmentStrategy=" + assignmentStrategy.propertyValue()
-				+ " targetFillRatio=" + assignmentTargetFillRatio);
+				+ " targetFillRatio=" + assignmentTargetFillRatio
+				+ " parallelism=" + wholeOrderParallelism);
 		PackagerResult best = null;
 		int attempted = 0;
 		int successful = 0;
-		long stopAt = deadline;
-		for (WholeOrderAssignmentSolver.Candidate candidate : candidates) {
-			if (System.currentTimeMillis() >= stopAt) {
-				break;
-			}
-			attempted++;
-			long candidateStarted = System.nanoTime();
-			System.out.println("packing-service whole-order candidate-start searchId=" + searchId
-					+ " attempt=" + attempted + " source=" + safe(candidate.source())
-					+ " generationIndex=" + (candidate.generationIndex() + 1)
-					+ candidate.score().logFields()
-					+ " containers=" + candidate.itemsByContainer().size());
-			List<Container> packedContainers = new ArrayList<>();
-			long duration = 0L;
-			boolean success = true;
-			int containersAttempted = 0;
-			int failedContainer = -1;
-			String failureReason = "none";
-			for (int i : candidate.score().validationOrder()) {
-				List<com.github.skjolber.packing.api.BoxItem> items = candidate.itemsByContainer().get(i);
-				if (items.isEmpty()) {
-					System.out.println("packing-service whole-order container-skip searchId=" + searchId
-							+ " attempt=" + attempted + " source=" + safe(candidate.source())
-							+ " container=" + (i + 1) + "/" + physicalContainers.size()
-							+ " containerId=" + safe(physicalContainers.get(i).getContainer().getId())
-							+ " reason=empty");
-					continue;
+		int workerCount = Math.min(wholeOrderParallelism, Math.max(1, candidates.size()));
+		AtomicLong workerSequence = new AtomicLong();
+		ExecutorService executor = Executors.newFixedThreadPool(workerCount, runnable -> {
+			Thread thread = new Thread(runnable,
+					"packing-candidate-" + searchId + '-' + workerSequence.incrementAndGet());
+			thread.setDaemon(true);
+			return thread;
+		});
+		try {
+			search:
+			for (int batchStart = 0; batchStart < candidates.size()
+					&& System.currentTimeMillis() < deadline; batchStart += workerCount) {
+				List<Future<CandidateValidation>> futures = new ArrayList<>();
+				int batchEnd = Math.min(candidates.size(), batchStart + workerCount);
+				for (int candidateIndex = batchStart; candidateIndex < batchEnd; candidateIndex++) {
+					WholeOrderAssignmentSolver.Candidate candidate = candidates.get(candidateIndex);
+					int attempt = candidateIndex + 1;
+					futures.add(executor.submit(() -> validateCandidate(plan, physicalContainers,
+							candidate, attempt, searchId, deadline, cache)));
+					attempted++;
 				}
-				containersAttempted++;
-				Container container = physicalContainers.get(i).getContainer();
-				LogContext context = new LogContext(searchId, attempted, candidate.source(),
-						i + 1, physicalContainers.size(), container.getId());
-				long containerStarted = System.nanoTime();
-				System.out.println("packing-service whole-order container-start" + context.fields()
-						+ " validationRank=" + containersAttempted
-						+ " predictedRisk=" + rounded(candidate.score().containerRisks().get(i))
-						+ " houseBills=" + houseBillCount(items) + " itemTypes=" + items.size()
-						+ " units=" + unitCount(items) + " volume=" + totalVolume(items)
-						+ " weight=" + totalWeight(items)
-						+ " volumeFillPct=" + percent(totalVolume(items), container.getMaxLoadVolume())
-						+ " weightFillPct=" + percent(totalWeight(items), container.getMaxLoadWeight())
-						+ (diagnosticsEnabled ? " houseBillIds=" + houseBillIds(items) : ""));
-				PackingPlan containerPlan = new PackingPlan(
-						plan.requestedContainers(),
-						List.of(physicalContainers.get(i)),
-						items,
-						plan.cargoLines(),
-						plan.warnings());
-				WholeOrderPackingCache.Lookup cached = cache.lookup(container, items);
-				PackagerResult packed;
-				if (cached.hit()) {
-					System.out.println("packing-service whole-order cache-hit" + context.fields()
-							+ " status=" + (cached.failed() ? "failure" : "success")
-							+ " savedMs=" + cached.savedMillis());
-					packed = cached.result();
-				} else {
-					System.out.println("packing-service whole-order cache-miss" + context.fields());
-					long packingStarted = System.nanoTime();
-					packed = packFlat(containerPlan, deadline, context);
-					long computationMillis = elapsedMillis(packingStarted);
-					if (packed != null && packed.isSuccess() && packed.size() == 1) {
-						cache.putSuccess(container, items, packed, computationMillis);
-					} else {
-						// Leave globally interrupted work uncached. A later candidate might reach
-						// the same load with enough time to complete its algorithm sequence.
-						boolean completed = System.currentTimeMillis() + 1_000L < deadline;
-						cache.putFailure(container, items, computationMillis, completed);
+				for (int futureIndex = 0; futureIndex < futures.size(); futureIndex++) {
+					long remainingMillis = deadline - System.currentTimeMillis();
+					if (remainingMillis <= 0L) break search;
+					try {
+						CandidateValidation validation = futures.get(futureIndex).get(
+								remainingMillis, TimeUnit.MILLISECONDS);
+						if (!validation.success()) continue;
+						successful++;
+						best = validation.result();
+						for (int cancel = futureIndex + 1; cancel < futures.size(); cancel++) {
+							futures.get(cancel).cancel(true);
+						}
+						break search;
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						break search;
+					} catch (TimeoutException e) {
+						break search;
+					} catch (ExecutionException e) {
+						System.err.println("packing-service whole-order candidate-error searchId="
+								+ searchId + " attempt=" + (batchStart + futureIndex + 1)
+								+ " reason=" + e.getCause());
 					}
 				}
-				if (packed == null || !packed.isSuccess() || packed.size() != 1) {
-					success = false;
-					failedContainer = i + 1;
-					failureReason = cached.hit() && cached.failed() ? "cached-failure"
-							: System.currentTimeMillis() >= deadline ? "deadline" : "no-algorithm-succeeded";
-					System.out.println("packing-service whole-order container-end" + context.fields()
-							+ " success=false elapsedMs=" + elapsedMillis(containerStarted)
-							+ " reason=" + failureReason);
-					break;
-				}
-				packedContainers.add(packed.get(0));
-				duration += packed.getDuration();
-				System.out.println("packing-service whole-order container-end" + context.fields()
-						+ " success=true elapsedMs=" + elapsedMillis(containerStarted)
-						+ " placements=" + packed.get(0).getStack().size());
 			}
-			if (success) {
-				PackagerResult packed = new PackagerResult(packedContainers, duration, false);
-				if (!splitsHouseBills(packed)) {
-					successful++;
-					System.out.println("packing-service whole-order success source=" + candidate.source()
-							+ " attempt=" + attempted + " containerCount=" + packed.size());
-					best = better(best, packed);
-					stopAt = System.currentTimeMillis();
-				} else {
-					success = false;
-					failureReason = "split-house-bill";
-				}
-			}
-			System.out.println("packing-service whole-order candidate-end searchId=" + searchId
-					+ " attempt=" + attempted + " source=" + safe(candidate.source())
-					+ " success=" + success + " containersAttempted=" + containersAttempted
-					+ " failedContainer=" + failedContainer + " reason=" + failureReason
-					+ " elapsedMs=" + elapsedMillis(candidateStarted));
+		} finally {
+			executor.shutdownNow();
 		}
 		WholeOrderPackingCache.Stats cacheStats = cache.stats();
 		System.out.println("packing-service whole-order candidates=" + candidates.size()
@@ -260,12 +268,131 @@ class PackingEngine {
 				+ " cacheFailureHits=" + cacheStats.failureHits() + " cacheSize=" + cacheStats.size()
 				+ " cacheSavedMs=" + cacheStats.savedMillis()
 				+ " termination=" + terminationReason(candidates.size(), attempted, successful, deadline));
-		if (tailCompactionEnabled && best != null && best.size() > 1) {
+		if (shouldCompactTail(compactTail, tailCompactionEnabled, best, compactionTargetCount)) {
 			long compactionDeadline = System.currentTimeMillis() + tailCompactionSearchMillis;
-			best = new TailContainerCompactor(supportPolicy,
-					tailCompactionBeamWidth, tailCompactionBranching).compact(best, compactionDeadline);
+			PackagerResult baseline = best;
+			try {
+				best = new TailContainerCompactor(supportPolicy,
+						tailCompactionBeamWidth, tailCompactionBranching).compact(best, compactionDeadline);
+			} catch (RuntimeException e) {
+				System.err.println("packing-service tail-compaction failed unexpectedly; keeping baseline: "
+						+ e.getMessage());
+				e.printStackTrace(System.err);
+				best = baseline;
+			}
 		}
 		return best;
+	}
+
+	private CandidateValidation validateCandidate(PackingPlan plan, List<ContainerItem> physicalContainers,
+			WholeOrderAssignmentSolver.Candidate candidate, int attempt, long searchId, long deadline,
+			WholeOrderPackingCache cache) {
+		long candidateStarted = System.nanoTime();
+		System.out.println("packing-service whole-order candidate-start searchId=" + searchId
+				+ " attempt=" + attempt + " source=" + safe(candidate.source())
+				+ " generationIndex=" + (candidate.generationIndex() + 1)
+				+ candidate.score().logFields()
+				+ " containers=" + candidate.itemsByContainer().size()
+				+ " worker=" + Thread.currentThread().getName());
+		List<Container> packedContainers = new ArrayList<>();
+		long duration = 0L;
+		boolean success = true;
+		int containersAttempted = 0;
+		int failedContainer = -1;
+		String failureReason = "none";
+		for (int i : candidate.score().validationOrder()) {
+			if (Thread.currentThread().isInterrupted() || System.currentTimeMillis() >= deadline) {
+				success = false;
+				failureReason = Thread.currentThread().isInterrupted() ? "cancelled" : "deadline";
+				break;
+			}
+			List<BoxItem> items = candidate.itemsByContainer().get(i);
+			if (items.isEmpty()) {
+				System.out.println("packing-service whole-order container-skip searchId=" + searchId
+						+ " attempt=" + attempt + " source=" + safe(candidate.source())
+						+ " container=" + (i + 1) + "/" + physicalContainers.size()
+						+ " containerId=" + safe(physicalContainers.get(i).getContainer().getId())
+						+ " reason=empty");
+				continue;
+			}
+			containersAttempted++;
+			Container container = physicalContainers.get(i).getContainer();
+			LogContext context = new LogContext(searchId, attempt, candidate.source(),
+					i + 1, physicalContainers.size(), container.getId());
+			long containerStarted = System.nanoTime();
+			System.out.println("packing-service whole-order container-start" + context.fields()
+					+ " validationRank=" + containersAttempted
+					+ " predictedRisk=" + rounded(candidate.score().containerRisks().get(i))
+					+ " houseBills=" + houseBillCount(items) + " itemTypes=" + items.size()
+					+ " units=" + unitCount(items) + " volume=" + totalVolume(items)
+					+ " weight=" + totalWeight(items)
+					+ " volumeFillPct=" + percent(totalVolume(items), container.getMaxLoadVolume())
+					+ " weightFillPct=" + percent(totalWeight(items), container.getMaxLoadWeight())
+					+ (diagnosticsEnabled ? " houseBillIds=" + houseBillIds(items) : ""));
+			PackingPlan containerPlan = new PackingPlan(
+					plan.requestedContainers(), List.of(physicalContainers.get(i)), items,
+					plan.cargoLines(), plan.warnings());
+			WholeOrderPackingCache.Lookup cached = cache.lookup(container, items);
+			PackagerResult packed;
+			if (cached.hit()) {
+				System.out.println("packing-service whole-order cache-hit" + context.fields()
+						+ " status=" + (cached.failed() ? "failure" : "success")
+						+ " savedMs=" + cached.savedMillis());
+				packed = cached.result();
+			} else {
+				System.out.println("packing-service whole-order cache-miss" + context.fields());
+				long packingStarted = System.nanoTime();
+				packed = packFlat(containerPlan, deadline, context);
+				long computationMillis = elapsedMillis(packingStarted);
+				if (packed != null && packed.isSuccess() && packed.size() == 1) {
+					cache.putSuccess(container, items, packed, computationMillis);
+				} else {
+					boolean completed = !Thread.currentThread().isInterrupted()
+							&& System.currentTimeMillis() + 1_000L < deadline;
+					cache.putFailure(container, items, computationMillis, completed);
+				}
+			}
+			if (packed == null || !packed.isSuccess() || packed.size() != 1) {
+				success = false;
+				failedContainer = i + 1;
+				failureReason = cached.hit() && cached.failed() ? "cached-failure"
+						: Thread.currentThread().isInterrupted() ? "cancelled"
+						: System.currentTimeMillis() >= deadline ? "deadline" : "no-algorithm-succeeded";
+				System.out.println("packing-service whole-order container-end" + context.fields()
+						+ " success=false elapsedMs=" + elapsedMillis(containerStarted)
+						+ " reason=" + failureReason);
+				break;
+			}
+			packedContainers.add(packed.get(0));
+			duration += packed.getDuration();
+			System.out.println("packing-service whole-order container-end" + context.fields()
+					+ " success=true elapsedMs=" + elapsedMillis(containerStarted)
+					+ " placements=" + packed.get(0).getStack().size());
+		}
+		PackagerResult result = null;
+		if (success) {
+			result = new PackagerResult(packedContainers, duration, false);
+			if (splitsHouseBills(result)) {
+				success = false;
+				failureReason = "split-house-bill";
+				result = null;
+			} else {
+				System.out.println("packing-service whole-order success source=" + candidate.source()
+						+ " attempt=" + attempt + " containerCount=" + result.size());
+			}
+		}
+		System.out.println("packing-service whole-order candidate-end searchId=" + searchId
+				+ " attempt=" + attempt + " source=" + safe(candidate.source())
+				+ " success=" + success + " containersAttempted=" + containersAttempted
+				+ " failedContainer=" + failedContainer + " reason=" + failureReason
+				+ " elapsedMs=" + elapsedMillis(candidateStarted));
+		return new CandidateValidation(success, result);
+	}
+
+	static boolean shouldCompactTail(boolean compactTail, boolean tailCompactionEnabled,
+			PackagerResult result, int targetContainerCount) {
+		return compactTail && tailCompactionEnabled && result != null && result.isSuccess()
+				&& targetContainerCount > 0 && result.size() > targetContainerCount;
 	}
 
 	private static List<ContainerItem> expandContainerItems(List<ContainerItem> items) {
@@ -366,24 +493,127 @@ class PackingEngine {
 	private PackagerResult tryBlockBeamSearch(PackingPlan plan, List<ContainerItem> containers,
 			String label, long deadline, LogContext context) {
 		if (containers.size() != 1 || totalContainerCount(containers) != 1) return null;
-		BlockBeamSearchPackager packager = new BlockBeamSearchPackager();
-		BlockBeamSearchPackager.SearchSession session = packager.newSession(
-				containers.get(0).getContainer(), plan.boxItems(), context.fields());
-		if (session == null) return null;
-		long remainingMillis = Math.max(0L,
-				BLOCK_BEAM_SEARCH_MILLIS - session.progress().activeMillis());
-		long localDeadline = System.currentTimeMillis() + remainingMillis;
-		if (deadline > 0L) localDeadline = Math.min(localDeadline, deadline);
 		long started = System.nanoTime();
-		BlockBeamSearchPackager.SearchProgress progress = session.advance(localDeadline);
-		PackagerResult result = progress.result();
+		long searchDeadline = System.currentTimeMillis() + BLOCK_BEAM_SEARCH_MILLIS;
+		if (deadline > 0L) searchDeadline = Math.min(searchDeadline, deadline);
+		List<BlockBeamAttempt> quickAttempts = new ArrayList<>();
+		PackagerResult result = null;
+		BlockBeamSearchPackager.SearchProgress bestProgress = null;
+		boolean wholeOrderValidation = context.searchId() != 0L;
+		boolean allowLns = !wholeOrderValidation && !hasBusinessRule(plan);
+		long explorationDeadline = allowLns
+				? Math.max(System.currentTimeMillis(), searchDeadline - 8_000L)
+				: searchDeadline;
+
+		if (wholeOrderValidation) {
+			BlockBeamSearchPackager packager = new BlockBeamSearchPackager(
+					64, 48, supportPolicy, BlockBeamSearchPackager.SearchProfile.BALANCED);
+			BlockBeamSearchPackager.SearchSession session = packager.newSession(
+					containers.get(0).getContainer(), plan.boxItems(),
+					context.fields() + " effort=baseline profile=balanced");
+			if (session != null) {
+				BlockBeamSearchPackager.SearchProgress progress = session.advance(explorationDeadline);
+				quickAttempts.add(new BlockBeamAttempt(
+						BlockBeamSearchPackager.SearchProfile.BALANCED, progress, session.bestPartial()));
+				bestProgress = progress;
+				if (progress.complete()) result = progress.result();
+			}
+		}
+
+		if (!wholeOrderValidation) {
+			for (BlockBeamSearchPackager.SearchProfile profile : BlockBeamSearchPackager.SearchProfile.values()) {
+				if (result != null) break;
+				if (System.currentTimeMillis() >= explorationDeadline) break;
+				BlockBeamSearchPackager packager = new BlockBeamSearchPackager(
+						64, 48, supportPolicy, profile);
+				BlockBeamSearchPackager.SearchSession session = packager.newSession(
+						containers.get(0).getContainer(), plan.boxItems(),
+						context.fields() + " effort=quick profile=" + profile.propertyValue());
+				if (session == null) continue;
+				long quickDeadline = Math.min(explorationDeadline,
+						System.currentTimeMillis() + BLOCK_BEAM_QUICK_SEARCH_MILLIS);
+				BlockBeamSearchPackager.SearchProgress progress = session.advance(quickDeadline);
+				quickAttempts.add(new BlockBeamAttempt(profile, progress, session.bestPartial()));
+				bestProgress = betterProgress(bestProgress, progress);
+				if (progress.complete()) {
+					result = progress.result();
+					break;
+				}
+			}
+		}
+
+		// Whole-order validation must try both the original and swapped container
+		// orientations within the shared 180-second budget. Restarting the same
+		// Balanced profile with a wider beam after it is exhausted can consume the
+		// budget before the swapped orientation or next assignment is reached.
+		if (!wholeOrderValidation && result == null && System.currentTimeMillis() < explorationDeadline) {
+			quickAttempts.sort(Comparator
+					.comparingDouble((BlockBeamAttempt attempt) ->
+							attempt.progress().volumeCompletionRatio()).reversed()
+					.thenComparing(Comparator.comparingDouble((BlockBeamAttempt attempt) ->
+							attempt.progress().completionRatio()).reversed())
+					.thenComparing(Comparator.comparingInt((BlockBeamAttempt attempt) ->
+							attempt.progress().eliteStates()).reversed()));
+			List<BlockBeamAttempt> intensiveAttempts = new ArrayList<>();
+			if (!wholeOrderValidation) {
+				quickAttempts.stream()
+						.filter(attempt -> attempt.profile() == BlockBeamSearchPackager.SearchProfile.BALANCED)
+						.findFirst().ifPresent(intensiveAttempts::add);
+			}
+			for (BlockBeamAttempt attempt : quickAttempts) {
+				if (intensiveAttempts.size() >= BLOCK_BEAM_INTENSIVE_PROFILES) break;
+				if (!intensiveAttempts.contains(attempt)) intensiveAttempts.add(attempt);
+			}
+			int intensiveCount = intensiveAttempts.size();
+			for (int index = 0; index < intensiveCount && System.currentTimeMillis() < explorationDeadline; index++) {
+				long remaining = explorationDeadline - System.currentTimeMillis();
+				int remainingProfiles = intensiveCount - index;
+				long share = index == 0 && remainingProfiles > 1
+						? Math.max(1L, Math.round(remaining * 0.7))
+						: Math.max(1L, remaining / remainingProfiles);
+				BlockBeamSearchPackager.SearchProfile profile = intensiveAttempts.get(index).profile();
+				BlockBeamSearchPackager packager = new BlockBeamSearchPackager(
+						BLOCK_BEAM_INTENSIVE_WIDTH, BLOCK_BEAM_INTENSIVE_BRANCHING,
+						supportPolicy, profile);
+				BlockBeamSearchPackager.SearchSession session = packager.newSession(
+						containers.get(0).getContainer(), plan.boxItems(),
+						context.fields() + " effort=intensive profile=" + profile.propertyValue());
+				if (session == null) continue;
+				BlockBeamSearchPackager.SearchProgress progress = session.advance(
+						Math.min(explorationDeadline, System.currentTimeMillis() + share));
+				quickAttempts.add(new BlockBeamAttempt(profile, progress, session.bestPartial()));
+				bestProgress = betterProgress(bestProgress, progress);
+				if (progress.complete()) {
+					result = progress.result();
+					break;
+				}
+			}
+		}
+		if (result == null && allowLns && System.currentTimeMillis() < searchDeadline) {
+			BlockBeamSearchPackager.PartialSolution partial = quickAttempts.stream()
+					.map(BlockBeamAttempt::partial)
+					.filter(java.util.Objects::nonNull)
+					.max(Comparator.comparingDouble(
+							BlockBeamSearchPackager.PartialSolution::volumeCompletionRatio))
+					.orElse(null);
+			if (partial != null) {
+				result = new ExtremePointGapFiller(supportPolicy).fill(
+						partial, searchDeadline, context.fields());
+				if (result == null && System.currentTimeMillis() < searchDeadline) {
+					result = new BlockBeamLargeNeighborhoodSearch(supportPolicy)
+							.repair(partial, searchDeadline, context.fields());
+				}
+			}
+		}
 		long elapsedMillis = (System.nanoTime() - started) / 1_000_000L;
 		if (result == null || !result.isSuccess()) {
 			System.out.println("packing-service " + label + context.fields()
 					+ " success=false elapsedMs=" + elapsedMillis
-					+ " reason=" + (progress.exhausted() ? "search-exhausted" : "deadline")
-					+ " cumulativeMs=" + progress.activeMillis()
-					+ " completion=" + rounded(progress.completionRatio()));
+					+ " reason=" + (System.currentTimeMillis() >= searchDeadline ? "deadline" : "search-exhausted")
+					+ " quickProfiles=" + quickAttempts.size()
+					+ " completion=" + rounded(bestProgress == null ? 0.0 : bestProgress.completionRatio())
+					+ " volumeCompletion=" + rounded(bestProgress == null ? 0.0
+							: bestProgress.volumeCompletionRatio()));
 			return null;
 		}
 		PlacementSupport.Validation support = PlacementSupport.validate(result, supportPolicy);
@@ -398,6 +628,25 @@ class PackingEngine {
 				+ (support.valid() ? "" : " rejectedBox=" + support.boxId()
 						+ " reason=" + support.reason() + " ratio=" + support.supportRatio()));
 		return valid ? result : null;
+	}
+
+	private static BlockBeamSearchPackager.SearchProgress betterProgress(
+			BlockBeamSearchPackager.SearchProgress current,
+			BlockBeamSearchPackager.SearchProgress candidate) {
+		if (current == null) return candidate;
+		int volume = Double.compare(candidate.volumeCompletionRatio(), current.volumeCompletionRatio());
+		if (volume != 0) return volume > 0 ? candidate : current;
+		int units = Double.compare(candidate.completionRatio(), current.completionRatio());
+		if (units != 0) return units > 0 ? candidate : current;
+		return candidate.eliteStates() > current.eliteStates() ? candidate : current;
+	}
+
+	private record BlockBeamAttempt(BlockBeamSearchPackager.SearchProfile profile,
+			BlockBeamSearchPackager.SearchProgress progress,
+			BlockBeamSearchPackager.PartialSolution partial) {
+	}
+
+	private record CandidateValidation(boolean success, PackagerResult result) {
 	}
 
 	private PackagerResult tryMacroPacks(PackingPlan plan, List<ContainerItem> containers,

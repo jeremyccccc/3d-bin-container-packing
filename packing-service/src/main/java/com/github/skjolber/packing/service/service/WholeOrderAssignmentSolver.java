@@ -35,8 +35,14 @@ final class WholeOrderAssignmentSolver {
 			double targetFillRatio) {
 		List<Container> containers = expandContainers(plan.containerItems());
 		List<OrderGroup> groups = group(plan.boxItems());
-		if (containers.size() < 2 || groups.isEmpty()) {
+		if (containers.isEmpty() || groups.isEmpty()) {
 			return List.of();
+		}
+		if (containers.size() == 1) {
+			List<Candidate> candidates = new ArrayList<>(1);
+			int[] assignment = new int[groups.size()];
+			addCandidate(candidates, new HashSet<>(), groups, containers, assignment, "single-container");
+			return candidateScorer.rank(candidates, containers, strategy, targetFillRatio);
 		}
 
 		List<Candidate> candidates = new ArrayList<>();
