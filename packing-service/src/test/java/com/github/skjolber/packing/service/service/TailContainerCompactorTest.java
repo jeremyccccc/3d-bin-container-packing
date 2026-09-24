@@ -10,6 +10,7 @@ import com.github.skjolber.packing.api.Box;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.PackagerResult;
 import com.github.skjolber.packing.api.Placement;
+import com.github.skjolber.packing.api.Rotation;
 import com.github.skjolber.packing.ep.points3d.DefaultPoint3D;
 
 class TailContainerCompactorTest {
@@ -81,6 +82,42 @@ class TailContainerCompactorTest {
 		assertThat(PlacementSupport.validate(compacted, PlacementSupport.DEFAULT_POLICY).valid()).isTrue();
 	}
 
+	@Test
+	void removesOnlyTheBlockingNeighborhoodWhenDirectInsertionFails() {
+		Container front = container("front", 1000, 1000, 1000);
+		front.getStack().add(placement(fixedBox("blocker", "FRONT-BLOCKER", 600, 1000, 1000), 200, 0, 0));
+
+		Container tail = container("tail", 1000, 1000, 1000);
+		tail.getStack().add(placement(box("moving", "TAIL", 400, 1000, 1000), 0, 0, 0));
+		PackagerResult source = new PackagerResult(List.of(front, tail), 10L, false);
+
+		PackagerResult compacted = new TailContainerCompactor(
+				PlacementSupport.DEFAULT_POLICY, 16, 16).compact(source,
+						System.currentTimeMillis() + 8_000L);
+
+		assertThat(compacted.getContainers()).hasSize(1);
+		assertThat(compacted.get(0).getStack().getPlacements()).hasSize(2);
+		assertThat(compacted.get(0).getStack().getPlacements().stream()
+				.filter(placement -> "TAIL".equals(houseBill(placement)))).hasSize(1);
+		assertThat(PlacementSupport.validate(compacted, PlacementSupport.DEFAULT_POLICY).valid()).isTrue();
+	}
+
+	@Test
+	void keepsBaselineAndDoesNotThrowWhenFixedPlacementsOverlap() {
+		Container front = container("front", 1000, 1000, 1000);
+		front.getStack().add(placement(box("first", "FRONT-1", 600, 600, 600), 0, 0, 0));
+		front.getStack().add(placement(box("second", "FRONT-2", 600, 600, 600), 500, 0, 0));
+		Container tail = container("tail", 1000, 1000, 1000);
+		tail.getStack().add(placement(box("moving", "TAIL", 100, 100, 100), 0, 0, 0));
+		PackagerResult source = new PackagerResult(List.of(front, tail), 10L, false);
+
+		PackagerResult compacted = new TailContainerCompactor(
+				PlacementSupport.DEFAULT_POLICY, 16, 16).compact(source,
+						System.currentTimeMillis() + 2_000L);
+
+		assertThat(compacted).isSameAs(source);
+	}
+
 	private static String houseBill(Placement placement) {
 		return String.valueOf((Object) placement.getBox().getProperty(PackingMapper.PROP_HOUSE_BS_ID));
 	}
@@ -92,6 +129,12 @@ class TailContainerCompactorTest {
 
 	private static Box box(String id, String houseBill, int dx, int dy, int dz) {
 		return Box.newBuilder().withId(id).withSize(dx, dy, dz).withWeight(1).withRotate3D()
+				.withProperty(PackingMapper.PROP_HOUSE_BS_ID, houseBill).build();
+	}
+
+	private static Box fixedBox(String id, String houseBill, int dx, int dy, int dz) {
+		return Box.newBuilder().withId(id).withSize(dx, dy, dz).withWeight(1)
+				.withRotation(Rotation.newBuilder().withBottomAtZeroDegrees().build())
 				.withProperty(PackingMapper.PROP_HOUSE_BS_ID, houseBill).build();
 	}
 
