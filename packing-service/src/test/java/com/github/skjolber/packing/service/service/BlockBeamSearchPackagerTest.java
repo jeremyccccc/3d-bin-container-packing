@@ -43,6 +43,24 @@ class BlockBeamSearchPackagerTest {
 	}
 
 	@Test
+	void tracksMaximumPackedVolumeForAnIncompleteSearch() {
+		Container container = container(100, 100, 100);
+		Box box = Box.newBuilder().withId("large").withSize(80, 80, 80)
+				.withWeight(1).withRotate3D().build();
+		BlockBeamSearchPackager.SearchSession session = new BlockBeamSearchPackager(8, 8)
+				.newSession(container, List.of(new BoxItem(box, 2)), " test=elite-volume");
+
+		BlockBeamSearchPackager.SearchProgress progress = session.advance(0L);
+
+		assertThat(progress.complete()).isFalse();
+		assertThat(progress.packedUnits()).isEqualTo(1);
+		assertThat(progress.packedVolume()).isEqualTo(box.getVolume());
+		assertThat(progress.totalVolume()).isEqualTo(box.getVolume() * 2L);
+		assertThat(progress.volumeCompletionRatio()).isEqualTo(0.5);
+		assertThat(progress.eliteStates()).isPositive();
+	}
+
+	@Test
 	void packsARegularBlockOnTopOfAFixedLayout() {
 		Container container = container(1200, 1000, 1200);
 		Placement platform = placement("platform", 0, 0, 0, 1100, 900, 100);
@@ -60,6 +78,20 @@ class BlockBeamSearchPackagerTest {
 		assertThat(result.get(0).getStack().getPlacements().stream()
 				.filter(placement -> placement != platform)
 				.noneMatch(platform::intersects)).isTrue();
+	}
+
+	@Test
+	void fixedLayoutInsertionStillRejectsUnsupportedCargo() {
+		Container container = container(200, 200, 200);
+		Placement narrowPlatform = placement("platform", 0, 0, 0, 80, 80, 100);
+		Box box = Box.newBuilder().withId("overhang").withSize(200, 200, 100)
+				.withWeight(1).build();
+
+		PackagerResult result = new BlockBeamSearchPackager(16, 16)
+				.pack(container, List.of(new BoxItem(box, 1)), List.of(narrowPlatform), 0L,
+						" test=fixed-support");
+
+		assertThat(result).isNull();
 	}
 
 	@Test

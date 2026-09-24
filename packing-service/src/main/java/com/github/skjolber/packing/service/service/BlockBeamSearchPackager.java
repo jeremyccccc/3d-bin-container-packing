@@ -33,10 +33,12 @@ final class BlockBeamSearchPackager {
 	private static final int DEFAULT_BRANCHING = 48;
 	private static final int MAX_VERTICAL_UNITS = 5;
 	private static final int TRACKED_FIT_SPACES = 4;
+	private static final int MAX_ELITE_STATES = 12;
 
 	private final int beamWidth;
 	private final int branching;
 	private final PlacementSupport.Policy supportPolicy;
+	private final SearchProfile searchProfile;
 
 	BlockBeamSearchPackager() {
 		this(DEFAULT_BEAM_WIDTH, DEFAULT_BRANCHING, PlacementSupport.DEFAULT_POLICY);
@@ -51,9 +53,15 @@ final class BlockBeamSearchPackager {
 	}
 
 	BlockBeamSearchPackager(int beamWidth, int branching, PlacementSupport.Policy supportPolicy) {
+		this(beamWidth, branching, supportPolicy, SearchProfile.BALANCED);
+	}
+
+	BlockBeamSearchPackager(int beamWidth, int branching, PlacementSupport.Policy supportPolicy,
+			SearchProfile searchProfile) {
 		this.beamWidth = beamWidth;
 		this.branching = branching;
 		this.supportPolicy = supportPolicy;
+		this.searchProfile = searchProfile;
 	}
 
 	PackagerResult pack(Container sourceContainer, List<BoxItem> items, long deadlineMillis) {
@@ -103,13 +111,18 @@ final class BlockBeamSearchPackager {
 		private final List<BoxItem> items;
 		private final List<Block> catalog;
 		private final List<Placement> fixedPlacements;
+		private final FixedPlacementIndex fixedPlacementIndex;
 		private final String logContext;
 		private final Set<String> visited = new HashSet<>();
 		private List<State> beam;
 		private int expandedStates;
 		private int generatedStates;
 		private int maximumPackedUnits;
+		private long maximumPackedVolume;
+		private final Map<String, State> eliteStates = new LinkedHashMap<>();
 		private final int totalUnits;
+		private final long fixedVolume;
+		private final long totalVolume;
 		private long activeMillis;
 		private boolean exhausted;
 		private PackagerResult completed;
@@ -120,16 +133,19 @@ final class BlockBeamSearchPackager {
 			this.items = items;
 			this.catalog = catalog;
 			this.fixedPlacements = fixedPlacements;
+			this.fixedPlacementIndex = new FixedPlacementIndex(fixedPlacements);
 			this.logContext = logContext;
 			int[] remaining = items.stream().mapToInt(BoxItem::getCount).toArray();
 			this.totalUnits = Arrays.stream(remaining).sum();
+			this.fixedVolume = fixedPlacements.stream().mapToLong(p -> p.getStackValue().getVolume()).sum();
+			this.totalVolume = items.stream()
+					.mapToLong(item -> item.getBox().getVolume() * (long) item.getCount()).sum();
 			List<Space> spaces = initialSpaces(container, fixedPlacements);
 			if (spaces.isEmpty()) {
 				this.beam = List.of();
 				this.exhausted = true;
 				return;
 			}
-			long fixedVolume = fixedPlacements.stream().mapToLong(p -> p.getStackValue().getVolume()).sum();
 			int fixedWeight = fixedWeight(fixedPlacements);
 			State initial = new State(remaining, spaces, List.of(), fixedVolume, fixedWeight, 0, 0,
 					feasibility(remaining, spaces, items));
@@ -145,10 +161,10 @@ final class BlockBeamSearchPackager {
 				for (State state : beam) {
 					if (state.complete()) return complete(state, callStarted);
 					expandedStates++;
-					for (Move move : moves(state, catalog, container, fixedPlacements)) {
+					for (Move move : moves(state, catalog, container, fixedPlacements, fixedPlacementIndex)) {
 						State child = apply(state, move, container, items);
 						generatedStates++;
-						maximumPackedUnits = Math.max(maximumPackedUnits, packedUnits(child));
+						trackElite(child);
 						if (child.feasibility().strandedTypes() == 0 && visited.add(child.key())) next.add(child);
 					}
 				}
@@ -165,23 +181,63 @@ final class BlockBeamSearchPackager {
 			}
 			activeMillis += elapsedMillis(callStarted);
 			System.out.println("packing-service BLOCK-BEAM" + logContext
+					+ " profile=" + searchProfile.propertyValue()
 					+ " success=false status=" + (exhausted ? "exhausted" : "paused")
 					+ " elapsedMs=" + activeMillis + " expanded=" + expandedStates
 					+ " generated=" + generatedStates + " blockTypes=" + catalog.size()
-					+ " packedUnits=" + maximumPackedUnits + "/" + totalUnits);
+					+ " packedUnits=" + maximumPackedUnits + "/" + totalUnits
+					+ " packedVolume=" + maximumPackedVolume + "/" + totalVolume
+					+ " elites=" + eliteStates.size());
 			return progress();
 		}
 
 		private SearchProgress complete(State state, long callStarted) {
 			activeMillis += elapsedMillis(callStarted);
 			maximumPackedUnits = totalUnits;
+			maximumPackedVolume = totalVolume;
 			completed = result(container, state, fixedPlacements, activeMillis, expandedStates, generatedStates, logContext);
 			return progress();
 		}
 
 		SearchProgress progress() {
 			return new SearchProgress(completed, exhausted, maximumPackedUnits, totalUnits,
+					maximumPackedVolume, totalVolume, eliteStates.size(),
 					expandedStates, generatedStates, activeMillis);
+		}
+
+		PartialSolution bestPartial() {
+			State best = eliteStates.values().stream()
+					.max(partialComparator(fixedVolume)).orElse(null);
+			if (best == null) return null;
+			Container partial = container.clone();
+			partial.getStack().addAll(fixedPlacements);
+			List<Placement> placements = new ArrayList<>();
+			for (BlockPlacement placement : best.placements()) placement.expandInto(placements);
+			partial.getStack().addAll(placements);
+			List<BoxItem> remaining = new ArrayList<>();
+			for (int index = 0; index < best.remaining().length; index++) {
+				int count = best.remaining()[index];
+				if (count > 0) remaining.add(new BoxItem(items.get(index).getBox(), count));
+			}
+			return new PartialSolution(partial, List.copyOf(remaining),
+					best.packedVolume(), fixedVolume + totalVolume,
+					packedUnits(best), totalUnits);
+		}
+
+		private void trackElite(State state) {
+			int units = packedUnits(state);
+			long volume = state.packedVolume() - fixedVolume;
+			maximumPackedUnits = Math.max(maximumPackedUnits, units);
+			maximumPackedVolume = Math.max(maximumPackedVolume, volume);
+			String shape = eliteShape(state, container);
+			State previous = eliteStates.get(shape);
+			if (previous == null || betterPartial(state, previous, fixedVolume)) eliteStates.put(shape, state);
+			if (eliteStates.size() > MAX_ELITE_STATES) {
+				String worst = eliteStates.entrySet().stream()
+						.min(Map.Entry.comparingByValue(partialComparator(fixedVolume)))
+						.map(Map.Entry::getKey).orElse(null);
+				if (worst != null) eliteStates.remove(worst);
+			}
 		}
 
 		private int packedUnits(State state) {
@@ -190,7 +246,8 @@ final class BlockBeamSearchPackager {
 	}
 
 	record SearchProgress(PackagerResult result, boolean exhausted, int packedUnits,
-			int totalUnits, int expandedStates, int generatedStates, long activeMillis) {
+			int totalUnits, long packedVolume, long totalVolume, int eliteStates,
+			int expandedStates, int generatedStates, long activeMillis) {
 		boolean complete() {
 			return result != null && result.isSuccess();
 		}
@@ -198,21 +255,38 @@ final class BlockBeamSearchPackager {
 		double completionRatio() {
 			return totalUnits == 0 ? 0.0 : packedUnits / (double) totalUnits;
 		}
+
+		double volumeCompletionRatio() {
+			return totalVolume == 0L ? 0.0 : packedVolume / (double) totalVolume;
+		}
+	}
+
+	record PartialSolution(Container container, List<BoxItem> remainingItems,
+			long loadedVolume, long targetVolume, int packedUnits, int totalUnits) {
+		double volumeCompletionRatio() {
+			return targetVolume == 0L ? 0.0 : loadedVolume / (double) targetVolume;
+		}
 	}
 
 	private List<Move> moves(State state, List<Block> catalog, Container container,
-			List<Placement> fixedPlacements) {
+			List<Placement> fixedPlacements, FixedPlacementIndex fixedPlacementIndex) {
 		PriorityQueue<Move> best = new PriorityQueue<>(Comparator.comparingDouble(Move::rank));
 		Map<Integer, Move> bestByItem = new HashMap<>();
 		for (int spaceIndex = 0; spaceIndex < state.spaces().size(); spaceIndex++) {
 			Space space = state.spaces().get(spaceIndex);
 			for (Block block : catalog) {
 				if (state.remaining()[block.itemIndex()] < block.units() || !space.fits(block)
-						|| state.intersects(space.x(), space.y(), space.z(), block)) continue;
-				if (!isSupported(space.x(), space.y(), space.z(), block,
+						|| state.intersects(space.x(), space.y(), space.z(), block)
+						|| fixedPlacementIndex.intersects(space.x(), space.y(), space.z(), block)) continue;
+				// A normal full-container search is validated as a complete layout by
+				// PlacementSupport. Pruning partially built layouts here changes the
+				// beam path and can discard a layout which becomes valid after later
+				// placements. Fixed-layout insertion is different: the existing cargo
+				// is immutable, so support must be checked while exploring its gaps.
+				if (!fixedPlacements.isEmpty() && !isSupported(space.x(), space.y(), space.z(), block,
 						fixedPlacements, state.placements(), supportPolicy)) continue;
 				if ((long) state.weight() + block.weight() > container.getMaxLoadWeight()) continue;
-				double rank = moveRank(space, block, container);
+				double rank = moveRank(space, block, container, searchProfile);
 				Move move = new Move(spaceIndex, block, false, rank);
 				add(best, move);
 				bestByItem.merge(block.itemIndex(), move,
@@ -237,26 +311,10 @@ final class BlockBeamSearchPackager {
 	}
 
 	private static void validateFixedPlacements(Container container, List<Placement> placements) {
-		for (int i = 0; i < placements.size(); i++) {
-			Placement placement = placements.get(i);
-			if (placement.getAbsoluteX() < 0 || placement.getAbsoluteY() < 0 || placement.getAbsoluteZ() < 0
-					|| placement.getAbsoluteEndX() >= container.getLoadDx()
-					|| placement.getAbsoluteEndY() >= container.getLoadDy()
-					|| placement.getAbsoluteEndZ() >= container.getLoadDz()) {
-				throw new IllegalArgumentException("Fixed placement is outside container: " + placement);
-			}
-			for (int j = 0; j < i; j++) {
-				if (intersects(placement, placements.get(j))) {
-					throw new IllegalArgumentException("Fixed placements overlap at indexes " + j + " and " + i);
-				}
-			}
+		PlacementGeometry.Validation validation = PlacementGeometry.validate(container, placements);
+		if (!validation.valid()) {
+			throw new IllegalArgumentException("Invalid fixed placements: " + validation.message());
 		}
-	}
-
-	private static boolean intersects(Placement a, Placement b) {
-		return a.getAbsoluteX() <= b.getAbsoluteEndX() && b.getAbsoluteX() <= a.getAbsoluteEndX()
-				&& a.getAbsoluteY() <= b.getAbsoluteEndY() && b.getAbsoluteY() <= a.getAbsoluteEndY()
-				&& a.getAbsoluteZ() <= b.getAbsoluteEndZ() && b.getAbsoluteZ() <= a.getAbsoluteEndZ();
 	}
 
 	private static int fixedWeight(List<Placement> placements) {
@@ -389,16 +447,24 @@ final class BlockBeamSearchPackager {
 		return length + max - min;
 	}
 
-	private static double moveRank(Space space, Block block, Container container) {
+	private static double moveRank(Space space, Block block, Container container, SearchProfile profile) {
 		double fill = block.volume() / (double) space.volume();
 		double footprint = (long) block.dx() * block.dy() / (double) ((long) space.dx() * space.dy());
 		double wall = (space.x() == 0 ? 1 : 0) + (space.y() == 0 ? 1 : 0)
 				+ (space.x() + block.dx() == container.getLoadDx() ? 1 : 0)
 				+ (space.y() + block.dy() == container.getLoadDy() ? 1 : 0);
-		return block.volume() / (double) container.getMaxLoadVolume() * 10_000_000.0
+		double balanced = block.volume() / (double) container.getMaxLoadVolume() * 10_000_000.0
 				+ block.units() * 100.0
 				+ fill * 100_000.0 + footprint * 20_000.0 + wall * 1_000.0
 				- space.z() * 0.01;
+		return switch (profile) {
+			case BALANCED -> balanced;
+			case VOLUME_FIRST -> balanced + block.volume() / (double) container.getMaxLoadVolume() * 8_000_000.0;
+			case SPACE_EFFICIENCY -> balanced + fill * 180_000.0 + footprint * 80_000.0;
+			case COMPACT_FRONT -> balanced + wall * 8_000.0
+					- space.x() / (double) container.getLoadDx() * 20_000.0
+					- space.z() / (double) container.getLoadDz() * 10_000.0;
+		};
 	}
 
 	private State apply(State state, Move move, Container container, List<BoxItem> items) {
@@ -418,11 +484,11 @@ final class BlockBeamSearchPackager {
 
 	List<State> selectBeam(List<State> candidates, Container container) {
 		if (candidates.size() <= beamWidth) {
-			candidates.sort(stateComparator(container));
+			candidates.sort(stateComparator(container, searchProfile));
 			return candidates;
 		}
 
-		Comparator<State> overall = stateComparator(container);
+		Comparator<State> overall = stateComparator(container, searchProfile);
 		Comparator<State> criticalSpace = Comparator
 				.comparingInt((State state) -> state.feasibility().strandedTypes())
 				.thenComparing(Comparator.comparingInt(
@@ -624,12 +690,54 @@ final class BlockBeamSearchPackager {
 				Math.multiplyExact(box.getVolume(), units)));
 	}
 
-	private static Comparator<State> stateComparator(Container container) {
-		return Comparator.comparingDouble((State state) -> state.score(container)).reversed();
+	private static Comparator<State> stateComparator(Container container, SearchProfile profile) {
+		Comparator<State> feasibilityStage = Comparator
+				.comparingInt((State state) -> state.feasibility().strandedTypes())
+				.thenComparingInt(state -> state.feasibility().scarceTypes())
+				.thenComparing(Comparator.comparingInt(
+						(State state) -> state.feasibility().minimumFitSpaces()).reversed())
+				.thenComparing(Comparator.comparingInt(
+						(State state) -> state.feasibility().minimumClearance()).reversed());
+		Comparator<State> qualityStage = switch (profile) {
+			case BALANCED -> Comparator.comparingDouble((State state) -> state.score(container)).reversed();
+			case VOLUME_FIRST -> Comparator.comparingLong(State::packedVolume).reversed()
+					.thenComparing(Comparator.comparingLong(
+							(State state) -> largestSpace(state.spaces())).reversed());
+			case SPACE_EFFICIENCY -> Comparator
+					.comparingLong((State state) -> largestSpace(state.spaces())).reversed()
+					.thenComparingInt(state -> state.spaces().size())
+					.thenComparing(Comparator.comparingLong(State::packedVolume).reversed());
+			case COMPACT_FRONT -> Comparator.comparingInt(State::maxX)
+					.thenComparingInt(State::maxZ)
+					.thenComparing(Comparator.comparingLong(State::packedVolume).reversed());
+		};
+		// Keep the main lane focused on packing quality. A separate quota in
+		// selectBeam uses feasibility-first ordering, so neither objective can
+		// eliminate the other before the next level.
+		return qualityStage.thenComparing(feasibilityStage);
+	}
+
+	private static Comparator<State> partialComparator(long fixedVolume) {
+		return Comparator.comparingLong((State state) -> state.packedVolume() - fixedVolume)
+				.thenComparingInt(state -> -Arrays.stream(state.remaining()).sum())
+				.thenComparingLong(state -> largestSpace(state.spaces()));
+	}
+
+	private static boolean betterPartial(State candidate, State current, long fixedVolume) {
+		return partialComparator(fixedVolume).compare(candidate, current) > 0;
+	}
+
+	private static String eliteShape(State state, Container container) {
+		int lengthBucket = 8 * state.maxX() / Math.max(1, container.getLoadDx());
+		int heightBucket = 8 * state.maxZ() / Math.max(1, container.getLoadDz());
+		int spaceBucket = Math.min(15, state.spaces().size() / 3);
+		int scarceBucket = Math.min(7, state.feasibility().scarceTypes());
+		return lengthBucket + ":" + heightBucket + ":" + spaceBucket + ":" + scarceBucket;
 	}
 
 	private static boolean expired(long deadlineMillis) {
-		return deadlineMillis > 0L && System.currentTimeMillis() >= deadlineMillis;
+		return Thread.currentThread().isInterrupted()
+				|| deadlineMillis > 0L && System.currentTimeMillis() >= deadlineMillis;
 	}
 
 	private static long elapsedMillis(long startedNanos) {
@@ -669,6 +777,59 @@ final class BlockBeamSearchPackager {
 	}
 
 	private record SupportInterval(int min, int max) {
+	}
+
+	private static final class FixedPlacementIndex {
+		private static final int CELL_SIZE = 1_000;
+		private final Map<Long, List<Placement>> cells = new HashMap<>();
+
+		private FixedPlacementIndex(List<Placement> placements) {
+			for (Placement placement : placements) {
+				for (int ix = placement.getAbsoluteX() / CELL_SIZE;
+						ix <= placement.getAbsoluteEndX() / CELL_SIZE; ix++) {
+					for (int iy = placement.getAbsoluteY() / CELL_SIZE;
+							iy <= placement.getAbsoluteEndY() / CELL_SIZE; iy++) {
+						for (int iz = placement.getAbsoluteZ() / CELL_SIZE;
+								iz <= placement.getAbsoluteEndZ() / CELL_SIZE; iz++) {
+							cells.computeIfAbsent(key(ix, iy, iz), ignored -> new ArrayList<>()).add(placement);
+						}
+					}
+				}
+			}
+		}
+
+		private boolean intersects(int x, int y, int z, Block block) {
+			int endX = x + block.dx();
+			int endY = y + block.dy();
+			int endZ = z + block.dz();
+			for (int ix = x / CELL_SIZE; ix <= (endX - 1) / CELL_SIZE; ix++) {
+				for (int iy = y / CELL_SIZE; iy <= (endY - 1) / CELL_SIZE; iy++) {
+					for (int iz = z / CELL_SIZE; iz <= (endZ - 1) / CELL_SIZE; iz++) {
+						for (Placement placement : cells.getOrDefault(key(ix, iy, iz), List.of())) {
+							if (x < placement.getAbsoluteEndX() + 1 && endX > placement.getAbsoluteX()
+									&& y < placement.getAbsoluteEndY() + 1 && endY > placement.getAbsoluteY()
+									&& z < placement.getAbsoluteEndZ() + 1 && endZ > placement.getAbsoluteZ()) return true;
+						}
+					}
+				}
+			}
+			return false;
+		}
+
+		private static long key(int x, int y, int z) {
+			return ((long) x << 42) | ((long) y << 21) | z;
+		}
+	}
+
+	enum SearchProfile {
+		BALANCED,
+		VOLUME_FIRST,
+		SPACE_EFFICIENCY,
+		COMPACT_FRONT;
+
+		String propertyValue() {
+			return name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+		}
 	}
 
 	record Feasibility(int strandedTypes, int scarceTypes,
