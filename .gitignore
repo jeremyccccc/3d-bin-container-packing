@@ -95,6 +95,7 @@ apm_modules/
 **/packing-results/
 **/packing-request-logs/
 /test-runs/
+**/test-runs/
 *.log
 
 # Locally generated packing screenshots
