@@ -25,7 +25,7 @@ class AutomaticContainerFallbackTest {
 	void addsA40HqAsTheFourthContainer() throws Exception {
 		PackingPlan original = new PackingMapper().toPlan(request());
 
-		PackingPlan fallback = PackingEngine.withAutomatic40Hq(original);
+		PackingPlan fallback = AutomaticContainerFallback.add40Hq(original);
 
 		assertThat(fallback.requestedContainers()).hasSize(4);
 		assertThat(fallback.requestedContainers().get(3).size()).isEqualTo(40);
@@ -40,7 +40,7 @@ class AutomaticContainerFallbackTest {
 				List.of(request().containerLists().get(0)), request().houseBillList());
 		PackingPlan original = new PackingMapper().toPlan(singleContainerRequest);
 
-		PackingPlan fallback = PackingEngine.withAutomatic40Hq(original);
+		PackingPlan fallback = AutomaticContainerFallback.add40Hq(original);
 
 		assertThat(fallback.requestedContainers()).hasSize(2);
 		assertThat(fallback.requestedContainers().get(1).id()).isEqualTo("AUTO-40HQ-2");
@@ -53,7 +53,7 @@ class AutomaticContainerFallbackTest {
 	@Test
 	void preservesTheFourContainerViewerWhenTheThreeContainerTargetIsNotAchieved() throws Exception {
 		PackingMapper mapper = new PackingMapper();
-		PackingPlan fallback = PackingEngine.withAutomatic40Hq(mapper.toPlan(request()));
+		PackingPlan fallback = AutomaticContainerFallback.add40Hq(mapper.toPlan(request()));
 		List<Container> containers = new ArrayList<>();
 		for (var item : fallback.containerItems()) containers.add(item.getContainer());
 		PackagerResult fourContainerLayout = new PackagerResult(containers, 1L, false);
@@ -77,7 +77,7 @@ class AutomaticContainerFallbackTest {
 	@Test
 	void returnsOnlyTheThreeActuallyUsedContainersAfterSuccessfulCompaction() throws Exception {
 		PackingMapper mapper = new PackingMapper();
-		PackingPlan fallback = PackingEngine.withAutomatic40Hq(mapper.toPlan(request()));
+		PackingPlan fallback = AutomaticContainerFallback.add40Hq(mapper.toPlan(request()));
 		List<Container> compactedContainers = fallback.containerItems().stream().limit(3)
 				.map(item -> item.getContainer()).toList();
 		PackagerResult compactedLayout = new PackagerResult(compactedContainers, 1L, false);
@@ -93,15 +93,15 @@ class AutomaticContainerFallbackTest {
 
 	@Test
 	void skipsTailCompactionWhenFallbackAlreadyUsesTheTargetContainerCount() throws Exception {
-		PackingPlan fallback = PackingEngine.withAutomatic40Hq(new PackingMapper().toPlan(request()));
+		PackingPlan fallback = AutomaticContainerFallback.add40Hq(new PackingMapper().toPlan(request()));
 		List<Container> threeContainers = fallback.containerItems().stream().limit(3)
 				.map(item -> item.getContainer()).toList();
 		List<Container> fourContainers = fallback.containerItems().stream()
 				.map(item -> item.getContainer()).toList();
 
-		assertThat(PackingEngine.shouldCompactTail(true, true,
+		assertThat(AutomaticContainerFallback.shouldCompact(true, true,
 				new PackagerResult(threeContainers, 1L, false), 3)).isFalse();
-		assertThat(PackingEngine.shouldCompactTail(true, true,
+		assertThat(AutomaticContainerFallback.shouldCompact(true, true,
 				new PackagerResult(fourContainers, 1L, false), 3)).isTrue();
 	}
 
