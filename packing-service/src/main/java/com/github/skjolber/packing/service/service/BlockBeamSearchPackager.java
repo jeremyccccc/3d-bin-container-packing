@@ -3,13 +3,10 @@ package com.github.skjolber.packing.service.service;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.Set;
 
 import com.github.skjolber.packing.api.Box;
@@ -29,13 +26,11 @@ final class BlockBeamSearchPackager {
 
 	private static final int DEFAULT_BEAM_WIDTH = 64;
 	private static final int DEFAULT_BRANCHING = 48;
-	private static final int TRACKED_FIT_SPACES = 4;
 	private static final int MAX_ELITE_STATES = 12;
 
-	private final int beamWidth;
-	private final int branching;
-	private final PlacementSupport.Policy supportPolicy;
 	private final SearchProfile searchProfile;
+	private final BlockBeamMoveGenerator moveGenerator;
+	private final BlockBeamSelector selector;
 
 	BlockBeamSearchPackager() {
 		this(DEFAULT_BEAM_WIDTH, DEFAULT_BRANCHING, PlacementSupport.DEFAULT_POLICY);
@@ -55,10 +50,9 @@ final class BlockBeamSearchPackager {
 
 	BlockBeamSearchPackager(int beamWidth, int branching, PlacementSupport.Policy supportPolicy,
 			SearchProfile searchProfile) {
-		this.beamWidth = beamWidth;
-		this.branching = branching;
-		this.supportPolicy = supportPolicy;
 		this.searchProfile = searchProfile;
+		this.moveGenerator = new BlockBeamMoveGenerator(branching, supportPolicy, searchProfile);
+		this.selector = new BlockBeamSelector(beamWidth, searchProfile);
 	}
 
 	PackagerResult pack(Container sourceContainer, List<BoxItem> items, long deadlineMillis) {
@@ -180,7 +174,8 @@ final class BlockBeamSearchPackager {
 					if (expandedStates - expandedAtStart >= maximumAdditionalStates) break search;
 					if (state.complete()) return complete(state, callStarted);
 					expandedStates++;
-					for (Move move : moves(state, catalog, container, fixedPlacements, fixedPlacementIndex)) {
+					for (Move move : moveGenerator.moves(
+							state, catalog, container, fixedPlacements, fixedPlacementIndex)) {
 						State child = apply(state, move, container, items);
 						generatedStates++;
 						trackElite(child);
@@ -226,7 +221,7 @@ final class BlockBeamSearchPackager {
 
 		PartialSolution bestPartial() {
 			State best = eliteStates.values().stream()
-					.max(partialComparator(fixedVolume)).orElse(null);
+					.max(BlockBeamStateEvaluator.partialComparator(fixedVolume)).orElse(null);
 			if (best == null) return null;
 			Container partial = container.clone();
 			partial.getStack().addAll(fixedPlacements);
@@ -248,12 +243,14 @@ final class BlockBeamSearchPackager {
 			long volume = state.packedVolume() - fixedVolume;
 			maximumPackedUnits = Math.max(maximumPackedUnits, units);
 			maximumPackedVolume = Math.max(maximumPackedVolume, volume);
-			String shape = eliteShape(state, container);
+			String shape = BlockBeamStateEvaluator.eliteShape(state, container);
 			State previous = eliteStates.get(shape);
-			if (previous == null || betterPartial(state, previous, fixedVolume)) eliteStates.put(shape, state);
+			if (previous == null || BlockBeamStateEvaluator.betterPartial(
+					state, previous, fixedVolume)) eliteStates.put(shape, state);
 			if (eliteStates.size() > MAX_ELITE_STATES) {
 				String worst = eliteStates.entrySet().stream()
-						.min(Map.Entry.comparingByValue(partialComparator(fixedVolume)))
+						.min(Map.Entry.comparingByValue(
+								BlockBeamStateEvaluator.partialComparator(fixedVolume)))
 						.map(Map.Entry::getKey).orElse(null);
 				if (worst != null) eliteStates.remove(worst);
 			}
@@ -294,48 +291,6 @@ final class BlockBeamSearchPackager {
 		}
 	}
 
-	private List<Move> moves(State state, List<Block> catalog, Container container,
-			List<Placement> fixedPlacements, BlockBeamFixedPlacementIndex fixedPlacementIndex) {
-		PriorityQueue<Move> best = new PriorityQueue<>(Comparator.comparingDouble(Move::rank));
-		Map<Integer, Move> bestByItem = new HashMap<>();
-		for (int spaceIndex = 0; spaceIndex < state.spaces().size(); spaceIndex++) {
-			Space space = state.spaces().get(spaceIndex);
-			for (Block block : catalog) {
-				if (state.remaining()[block.itemIndex()] < block.units() || !space.fits(block)
-						|| state.intersects(space.x(), space.y(), space.z(), block)
-						|| fixedPlacementIndex.intersects(space.x(), space.y(), space.z(), block)) continue;
-				// A normal full-container search is validated as a complete layout by
-				// PlacementSupport. Pruning partially built layouts here changes the
-				// beam path and can discard a layout which becomes valid after later
-				// placements. Fixed-layout insertion is different: the existing cargo
-				// is immutable, so support must be checked while exploring its gaps.
-				if (!fixedPlacements.isEmpty() && !BlockBeamSupportValidator.isSupported(space.x(), space.y(), space.z(), block,
-						fixedPlacements, state.placements(), supportPolicy)) continue;
-				if ((long) state.weight() + block.weight() > container.getMaxLoadWeight()) continue;
-				double rank = moveRank(space, block, container, searchProfile);
-				Move move = new Move(spaceIndex, block, false, rank);
-				add(best, move);
-				bestByItem.merge(block.itemIndex(), move,
-						(a, b) -> a.rank() >= b.rank() ? a : b);
-			}
-		}
-		Map<String, Move> unique = new LinkedHashMap<>();
-		for (Move move : best) unique.put(move.key(), move);
-		for (Move move : bestByItem.values()) unique.put(move.key(), move);
-		List<Move> result = new ArrayList<>(unique.values());
-		result.sort(Comparator.comparingDouble(Move::rank).reversed());
-		return result;
-	}
-
-	private void add(PriorityQueue<Move> best, Move move) {
-		if (best.size() < branching) {
-			best.add(move);
-		} else if (move.rank() > best.peek().rank()) {
-			best.poll();
-			best.add(move);
-		}
-	}
-
 	private static void validateFixedPlacements(Container container, List<Placement> placements) {
 		PlacementGeometry.Validation validation = PlacementGeometry.validate(container, placements);
 		if (!validation.valid()) {
@@ -347,26 +302,6 @@ final class BlockBeamSearchPackager {
 		long weight = 0L;
 		for (Placement placement : placements) weight += placement.getBox().getWeight();
 		return (int) Math.min(Integer.MAX_VALUE, weight);
-	}
-
-	private static double moveRank(Space space, Block block, Container container, SearchProfile profile) {
-		double fill = block.volume() / (double) space.volume();
-		double footprint = (long) block.dx() * block.dy() / (double) ((long) space.dx() * space.dy());
-		double wall = (space.x() == 0 ? 1 : 0) + (space.y() == 0 ? 1 : 0)
-				+ (space.x() + block.dx() == container.getLoadDx() ? 1 : 0)
-				+ (space.y() + block.dy() == container.getLoadDy() ? 1 : 0);
-		double balanced = block.volume() / (double) container.getMaxLoadVolume() * 10_000_000.0
-				+ block.units() * 100.0
-				+ fill * 100_000.0 + footprint * 20_000.0 + wall * 1_000.0
-				- space.z() * 0.01;
-		return switch (profile) {
-			case BALANCED -> balanced;
-			case VOLUME_FIRST -> balanced + block.volume() / (double) container.getMaxLoadVolume() * 8_000_000.0;
-			case SPACE_EFFICIENCY -> balanced + fill * 180_000.0 + footprint * 80_000.0;
-			case COMPACT_FRONT -> balanced + wall * 8_000.0
-					- space.x() / (double) container.getLoadDx() * 20_000.0
-					- space.z() / (double) container.getLoadDz() * 10_000.0;
-		};
 	}
 
 	private State apply(State state, Move move, Container container, List<BoxItem> items) {
@@ -386,163 +321,11 @@ final class BlockBeamSearchPackager {
 	}
 
 	List<State> selectBeam(List<State> candidates, Container container) {
-		if (candidates.size() <= beamWidth) {
-			candidates.sort(stateComparator(container, searchProfile));
-			return candidates;
-		}
-
-		Comparator<State> overall = stateComparator(container, searchProfile);
-		Comparator<State> criticalSpace = Comparator
-				.comparingInt((State state) -> state.feasibility().strandedTypes())
-				.thenComparing(Comparator.comparingInt(
-						(State state) -> state.feasibility().minimumFitSpaces()).reversed())
-				.thenComparingInt(state -> state.feasibility().scarceTypes())
-				.thenComparing(Comparator.comparingInt(
-						(State state) -> state.feasibility().minimumClearance()).reversed())
-				.thenComparing(overall);
-		Comparator<State> openSpace = Comparator
-				.comparingLong((State state) -> largestSpace(state.spaces())).reversed()
-				.thenComparingInt(state -> state.spaces().size())
-				.thenComparing(overall);
-
-		LinkedHashSet<State> selected = new LinkedHashSet<>(beamWidth * 2);
-		addBest(selected, candidates, overall,
-				availableQuota(selected, Math.max(1, beamWidth / 2)));
-		addBest(selected, candidates, criticalSpace,
-				availableQuota(selected, Math.max(1, beamWidth / 4)));
-		addBest(selected, candidates, openSpace,
-				availableQuota(selected, Math.max(1, beamWidth / 8)));
-		addShapeDiversity(selected, candidates, overall, container,
-				availableQuota(selected, Math.max(1, beamWidth / 8)));
-		addBest(selected, candidates, overall, beamWidth - selected.size());
-		return new ArrayList<>(selected);
-	}
-
-	private int availableQuota(Set<State> selected, int requested) {
-		return Math.max(0, Math.min(requested, beamWidth - selected.size()));
-	}
-
-	private static void addBest(Set<State> selected, List<State> candidates,
-			Comparator<State> comparator, int count) {
-		if (count <= 0) return;
-		List<State> sorted = new ArrayList<>(candidates);
-		sorted.sort(comparator);
-		int added = 0;
-		for (State state : sorted) {
-			if (selected.add(state) && ++added >= count) return;
-		}
-	}
-
-	private static void addShapeDiversity(Set<State> selected, List<State> candidates,
-			Comparator<State> comparator, Container container, int count) {
-		if (count <= 0) return;
-		List<State> sorted = new ArrayList<>(candidates);
-		sorted.sort(comparator);
-		Set<String> buckets = new HashSet<>();
-		int added = 0;
-		for (State state : sorted) {
-			int lengthBucket = 4 * state.maxX() / Math.max(1, container.getLoadDx());
-			int heightBucket = 4 * state.maxZ() / Math.max(1, container.getLoadDz());
-			int spaceBucket = Math.min(7, state.spaces().size() / 4);
-			String bucket = lengthBucket + ":" + heightBucket + ":" + spaceBucket;
-			if (selected.contains(state) || !buckets.add(bucket)) continue;
-			selected.add(state);
-			if (++added >= count) return;
-		}
-	}
-
-	private static long largestSpace(List<Space> spaces) {
-		long largest = 0L;
-		for (Space space : spaces) largest = Math.max(largest, space.volume());
-		return largest;
+		return selector.select(candidates, container);
 	}
 
 	static Feasibility feasibility(int[] remaining, List<Space> spaces, List<BoxItem> items) {
-		int strandedTypes = 0;
-		int scarceTypes = 0;
-		int minimumFitSpaces = Integer.MAX_VALUE;
-		int minimumClearance = Integer.MAX_VALUE;
-		for (int itemIndex = 0; itemIndex < remaining.length; itemIndex++) {
-			if (remaining[itemIndex] == 0) continue;
-			Box box = items.get(itemIndex).getBox();
-			int fitSpaces = 0;
-			int bestClearance = -1;
-			for (Space space : spaces) {
-				int clearance = clearance(box, space);
-				if (clearance < 0) continue;
-				fitSpaces++;
-				bestClearance = Math.max(bestClearance, clearance);
-				if (fitSpaces >= TRACKED_FIT_SPACES) break;
-			}
-			if (fitSpaces == 0) {
-				strandedTypes++;
-				minimumFitSpaces = 0;
-				minimumClearance = -1;
-				continue;
-			}
-			minimumFitSpaces = Math.min(minimumFitSpaces, fitSpaces);
-			minimumClearance = Math.min(minimumClearance, bestClearance);
-			if (fitSpaces <= 2) scarceTypes++;
-		}
-		if (minimumFitSpaces == Integer.MAX_VALUE) minimumFitSpaces = TRACKED_FIT_SPACES;
-		if (minimumClearance == Integer.MAX_VALUE) minimumClearance = 0;
-		return new Feasibility(strandedTypes, scarceTypes, minimumFitSpaces, minimumClearance);
-	}
-
-	private static int clearance(Box box, Space space) {
-		int best = -1;
-		for (BoxStackValue orientation : box.getStackValues()) {
-			if (orientation.getDx() > space.dx() || orientation.getDy() > space.dy()
-					|| orientation.getDz() > space.dz()) continue;
-			best = Math.max(best, Math.min(space.dx() - orientation.getDx(),
-					Math.min(space.dy() - orientation.getDy(), space.dz() - orientation.getDz())));
-		}
-		return best;
-	}
-
-	private static Comparator<State> stateComparator(Container container, SearchProfile profile) {
-		Comparator<State> feasibilityStage = Comparator
-				.comparingInt((State state) -> state.feasibility().strandedTypes())
-				.thenComparingInt(state -> state.feasibility().scarceTypes())
-				.thenComparing(Comparator.comparingInt(
-						(State state) -> state.feasibility().minimumFitSpaces()).reversed())
-				.thenComparing(Comparator.comparingInt(
-						(State state) -> state.feasibility().minimumClearance()).reversed());
-		Comparator<State> qualityStage = switch (profile) {
-			case BALANCED -> Comparator.comparingDouble((State state) -> state.score(container)).reversed();
-			case VOLUME_FIRST -> Comparator.comparingLong(State::packedVolume).reversed()
-					.thenComparing(Comparator.comparingLong(
-							(State state) -> largestSpace(state.spaces())).reversed());
-			case SPACE_EFFICIENCY -> Comparator
-					.comparingLong((State state) -> largestSpace(state.spaces())).reversed()
-					.thenComparingInt(state -> state.spaces().size())
-					.thenComparing(Comparator.comparingLong(State::packedVolume).reversed());
-			case COMPACT_FRONT -> Comparator.comparingInt(State::maxX)
-					.thenComparingInt(State::maxZ)
-					.thenComparing(Comparator.comparingLong(State::packedVolume).reversed());
-		};
-		// Keep the main lane focused on packing quality. A separate quota in
-		// selectBeam uses feasibility-first ordering, so neither objective can
-		// eliminate the other before the next level.
-		return qualityStage.thenComparing(feasibilityStage);
-	}
-
-	private static Comparator<State> partialComparator(long fixedVolume) {
-		return Comparator.comparingLong((State state) -> state.packedVolume() - fixedVolume)
-				.thenComparingInt(state -> -Arrays.stream(state.remaining()).sum())
-				.thenComparingLong(state -> largestSpace(state.spaces()));
-	}
-
-	private static boolean betterPartial(State candidate, State current, long fixedVolume) {
-		return partialComparator(fixedVolume).compare(candidate, current) > 0;
-	}
-
-	private static String eliteShape(State state, Container container) {
-		int lengthBucket = 8 * state.maxX() / Math.max(1, container.getLoadDx());
-		int heightBucket = 8 * state.maxZ() / Math.max(1, container.getLoadDz());
-		int spaceBucket = Math.min(15, state.spaces().size() / 3);
-		int scarceBucket = Math.min(7, state.feasibility().scarceTypes());
-		return lengthBucket + ":" + heightBucket + ":" + spaceBucket + ":" + scarceBucket;
+		return BlockBeamStateEvaluator.feasibility(remaining, spaces, items);
 	}
 
 	private static boolean expired(long deadlineMillis) {
@@ -573,7 +356,7 @@ final class BlockBeamSearchPackager {
 		}
 	}
 
-	private record Move(int spaceIndex, Block block, boolean yFirst, double rank) {
+	record Move(int spaceIndex, Block block, boolean yFirst, double rank) {
 		String key() {
 			return spaceIndex + ":" + block.itemIndex() + ":" + block.orientation().getIndex()
 					+ ":" + block.nx() + ":" + block.ny() + ":" + block.nz();
