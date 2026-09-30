@@ -53,6 +53,14 @@ final class WholeOrderPackingCache {
 		return new Stats(hits, misses, successHits, failureHits, entries.size(), savedMillis);
 	}
 
+	synchronized Evidence evidence(Container target, List<BoxItem> items) {
+		Entry entry = entries.get(key(target, items));
+		if (entry == null) return Evidence.UNKNOWN;
+		return entry.result() == null
+				? new Evidence(Status.FAILURE, entry.computationMillis())
+				: new Evidence(Status.SUCCESS, entry.computationMillis());
+	}
+
 	private static Key key(Container container, List<BoxItem> items) {
 		ContainerKey containerKey = new ContainerKey(container.getDx(), container.getDy(), container.getDz(),
 				container.getLoadDx(), container.getLoadDy(), container.getLoadDz(),
@@ -117,6 +125,16 @@ final class WholeOrderPackingCache {
 	}
 
 	record Stats(int hits, int misses, int successHits, int failureHits, int size, long savedMillis) {
+	}
+
+	enum Status {
+		UNKNOWN,
+		SUCCESS,
+		FAILURE
+	}
+
+	record Evidence(Status status, long computationMillis) {
+		private static final Evidence UNKNOWN = new Evidence(Status.UNKNOWN, 0L);
 	}
 
 	private record Entry(PackagerResult result, long computationMillis) {

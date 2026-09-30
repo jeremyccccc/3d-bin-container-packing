@@ -73,6 +73,15 @@ final class BlockBeamSearchPackager {
 		return session == null ? null : session.advance(deadlineMillis).result();
 	}
 
+	SearchProgress probe(Container sourceContainer, List<BoxItem> items, int maximumExpandedStates,
+			String logContext) {
+		if (maximumExpandedStates <= 0) {
+			throw new IllegalArgumentException("maximumExpandedStates must be positive");
+		}
+		SearchSession session = newSession(sourceContainer, items, logContext);
+		return session == null ? SearchProgress.empty(items) : session.advanceStates(maximumExpandedStates);
+	}
+
 	PackagerResult pack(Container sourceContainer, List<BoxItem> items, List<Placement> fixedPlacements,
 			long deadlineMillis, String logContext) {
 		SearchSession session = newSession(sourceContainer, items, fixedPlacements, logContext);
@@ -154,11 +163,24 @@ final class BlockBeamSearchPackager {
 		}
 
 		SearchProgress advance(long deadlineMillis) {
+			return advance(deadlineMillis, Integer.MAX_VALUE);
+		}
+
+		SearchProgress advanceStates(int maximumAdditionalStates) {
+			if (maximumAdditionalStates <= 0) return progress();
+			return advance(0L, maximumAdditionalStates);
+		}
+
+		private SearchProgress advance(long deadlineMillis, int maximumAdditionalStates) {
 			if (completed != null || exhausted) return progress();
 			long callStarted = System.nanoTime();
-			while (!beam.isEmpty() && !expired(deadlineMillis)) {
+			int expandedAtStart = expandedStates;
+			search:
+			while (!beam.isEmpty() && !expired(deadlineMillis)
+					&& expandedStates - expandedAtStart < maximumAdditionalStates) {
 				List<State> next = new ArrayList<>();
 				for (State state : beam) {
+					if (expandedStates - expandedAtStart >= maximumAdditionalStates) break search;
 					if (state.complete()) return complete(state, callStarted);
 					expandedStates++;
 					for (Move move : moves(state, catalog, container, fixedPlacements, fixedPlacementIndex)) {
@@ -258,6 +280,13 @@ final class BlockBeamSearchPackager {
 
 		double volumeCompletionRatio() {
 			return totalVolume == 0L ? 0.0 : packedVolume / (double) totalVolume;
+		}
+
+		private static SearchProgress empty(List<BoxItem> items) {
+			int units = items.stream().mapToInt(BoxItem::getCount).sum();
+			long volume = items.stream()
+					.mapToLong(item -> item.getBox().getVolume() * (long) item.getCount()).sum();
+			return new SearchProgress(null, true, 0, units, 0L, volume, 0, 0, 0, 0L);
 		}
 	}
 

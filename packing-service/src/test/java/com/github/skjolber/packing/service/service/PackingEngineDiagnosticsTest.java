@@ -50,10 +50,12 @@ class PackingEngineDiagnosticsTest {
 				"whole-order candidate-start searchId=",
 				"whole-order container-start searchId=",
 				"houseBillIds=",
-				"BlockBeam searchId=",
+				"BLOCK-BEAM searchId=",
+				"phase=candidate-probe",
+				"whole-order candidate-probe-window searchId=",
 				"whole-order container-end searchId=",
 				"whole-order candidate-end searchId=",
-				"whole-order cache-miss searchId=",
+				"whole-order cache-hit searchId=",
 				"cacheHits=",
 				"termination=");
 	}

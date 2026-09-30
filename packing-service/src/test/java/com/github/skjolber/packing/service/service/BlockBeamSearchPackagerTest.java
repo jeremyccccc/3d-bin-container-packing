@@ -61,6 +61,28 @@ class BlockBeamSearchPackagerTest {
 	}
 
 	@Test
+	void probeStopsAtAStableExpandedStateBudget() {
+		Container container = container(200, 200, 200);
+		Box first = Box.newBuilder().withId("first").withSize(100, 100, 100)
+				.withWeight(1).withRotate3D().build();
+		Box second = Box.newBuilder().withId("second").withSize(80, 80, 80)
+				.withWeight(1).withRotate3D().build();
+		BlockBeamSearchPackager packager = new BlockBeamSearchPackager(12, 10);
+		List<BoxItem> items = List.of(new BoxItem(first, 5), new BoxItem(second, 5));
+
+		BlockBeamSearchPackager.SearchProgress firstProbe = packager.probe(
+				container, items, 1, " test=probe-first");
+		BlockBeamSearchPackager.SearchProgress secondProbe = packager.probe(
+				container, items, 1, " test=probe-second");
+
+		assertThat(firstProbe.expandedStates()).isEqualTo(1);
+		assertThat(secondProbe.expandedStates()).isEqualTo(1);
+		assertThat(secondProbe.packedUnits()).isEqualTo(firstProbe.packedUnits());
+		assertThat(secondProbe.packedVolume()).isEqualTo(firstProbe.packedVolume());
+		assertThat(secondProbe.generatedStates()).isEqualTo(firstProbe.generatedStates());
+	}
+
+	@Test
 	void packsARegularBlockOnTopOfAFixedLayout() {
 		Container container = container(1200, 1000, 1200);
 		Placement platform = placement("platform", 0, 0, 0, 1100, 900, 100);

@@ -90,14 +90,19 @@ final class WholeOrderAssignmentSolver {
 
 		List<OrderGroup> result = new ArrayList<>();
 		for (Map.Entry<String, List<BoxItem>> entry : byHouseBill.entrySet()) {
-			long volume = entry.getValue().stream().mapToLong(BoxItem::getVolume).sum();
-			long weight = entry.getValue().stream().mapToLong(BoxItem::getWeight).sum();
-			long largestBox = entry.getValue().stream()
+			List<BoxItem> items = List.copyOf(entry.getValue());
+			long volume = items.stream().mapToLong(BoxItem::getVolume).sum();
+			long weight = items.stream().mapToLong(BoxItem::getWeight).sum();
+			long largestBox = items.stream()
 					.mapToLong(item -> item.getBox().getVolume())
 					.max()
 					.orElse(0L);
-			result.add(new OrderGroup(entry.getKey(), List.copyOf(entry.getValue()), volume, weight, largestBox));
+			String stableKey = entry.getKey() + '\u0000' + items.stream()
+					.map(PackingDeterminism::boxItemKey).sorted()
+					.reduce((left, right) -> left + '\u0001' + right).orElse("");
+			result.add(new OrderGroup(entry.getKey(), items, volume, weight, largestBox, stableKey));
 		}
+		result.sort(Comparator.comparing(OrderGroup::stableKey));
 		return result;
 	}
 
@@ -107,10 +112,12 @@ final class WholeOrderAssignmentSolver {
 		double[] priority = new double[groups.size()];
 		for (int i = 0; i < groups.size(); i++) {
 			order.add(i);
-			priority[i] = groups.get(i).volume() * (0.90 + random.nextDouble() * 0.20);
+			OrderGroup group = groups.get(i);
+			priority[i] = group.volume() * (0.90 + random.nextDouble() * 0.20);
 		}
 		order.sort(Comparator.<Integer>comparingDouble(index -> -priority[index])
-				.thenComparingLong(index -> -groups.get(index).largestBox()));
+				.thenComparingLong(index -> -groups.get(index).largestBox())
+				.thenComparing(index -> groups.get(index).stableKey()));
 
 		long[] usedVolume = new long[containers.size()];
 		long[] usedWeight = new long[containers.size()];
@@ -159,10 +166,12 @@ final class WholeOrderAssignmentSolver {
 		double[] priority = new double[groups.size()];
 		for (int i = 0; i < groups.size(); i++) {
 			order.add(i);
-			priority[i] = groups.get(i).volume() * (0.90 + random.nextDouble() * 0.20);
+			OrderGroup group = groups.get(i);
+			priority[i] = group.volume() * (0.90 + random.nextDouble() * 0.20);
 		}
 		order.sort(Comparator.<Integer>comparingDouble(index -> -priority[index])
-				.thenComparingLong(index -> -groups.get(index).largestBox()));
+				.thenComparingLong(index -> -groups.get(index).largestBox())
+				.thenComparing(index -> groups.get(index).stableKey()));
 
 		long[] usedVolume = new long[containers.size()];
 		long[] usedWeight = new long[containers.size()];
@@ -276,7 +285,8 @@ final class WholeOrderAssignmentSolver {
 			order.add(i);
 		}
 		order.sort(Comparator.<Integer>comparingLong(index -> -groups.get(index).volume())
-				.thenComparingLong(index -> -groups.get(index).largestBox()));
+				.thenComparingLong(index -> -groups.get(index).largestBox())
+				.thenComparing(index -> groups.get(index).stableKey()));
 
 		SearchState state = new SearchState(result, signatures, groups, containers, order);
 		state.search(0);
@@ -284,7 +294,7 @@ final class WholeOrderAssignmentSolver {
 
 	private static void addCandidate(List<Candidate> result, Set<String> signatures,
 			List<OrderGroup> groups, List<Container> containers, int[] assignment, String source) {
-		String signature = canonicalSignature(assignment, containers);
+		String signature = canonicalSignature(groups, assignment, containers);
 		if (!signatures.add(signature)) {
 			return;
 		}
@@ -296,19 +306,24 @@ final class WholeOrderAssignmentSolver {
 			itemsByContainer.get(assignment[groupIndex]).addAll(groups.get(groupIndex).items());
 		}
 		result.add(new Candidate(itemsByContainer.stream().map(List::copyOf).toList(), source,
-				result.size(), null));
+				result.size(), signature, null));
 	}
 
-	private static String canonicalSignature(int[] assignment, List<Container> containers) {
-		Map<String, Map<Integer, Integer>> labelsByType = new LinkedHashMap<>();
-		StringBuilder signature = new StringBuilder(assignment.length * 12);
-		for (int containerIndex : assignment) {
-			String type = containerType(containers.get(containerIndex));
-			Map<Integer, Integer> labels = labelsByType.computeIfAbsent(type, ignored -> new LinkedHashMap<>());
-			int label = labels.computeIfAbsent(containerIndex, ignored -> labels.size());
-			signature.append(type).append('#').append(label).append(';');
+	private static String canonicalSignature(List<OrderGroup> groups, int[] assignment,
+			List<Container> containers) {
+		List<List<String>> groupKeysByContainer = new ArrayList<>(containers.size());
+		for (int i = 0; i < containers.size(); i++) groupKeysByContainer.add(new ArrayList<>());
+		for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
+			groupKeysByContainer.get(assignment[groupIndex]).add(groups.get(groupIndex).stableKey());
 		}
-		return signature.toString();
+		List<String> loads = new ArrayList<>(containers.size());
+		for (int containerIndex = 0; containerIndex < containers.size(); containerIndex++) {
+			List<String> keys = groupKeysByContainer.get(containerIndex);
+			keys.sort(String::compareTo);
+			loads.add(containerType(containers.get(containerIndex)) + '[' + String.join(";", keys) + ']');
+		}
+		loads.sort(String::compareTo);
+		return String.join("|", loads);
 	}
 
 	private static String containerType(Container container) {
@@ -317,14 +332,15 @@ final class WholeOrderAssignmentSolver {
 				+ ':' + container.getEmptyWeight() + ':' + container.getMaxLoadWeight();
 	}
 
-	record Candidate(List<List<BoxItem>> itemsByContainer, String source, int generationIndex,
+	record Candidate(List<List<BoxItem>> itemsByContainer, String source, int generationIndex, String signature,
 			WholeOrderCandidateScorer.Score score) {
 		Candidate withScore(WholeOrderCandidateScorer.Score score) {
-			return new Candidate(itemsByContainer, source, generationIndex, score);
+			return new Candidate(itemsByContainer, source, generationIndex, signature, score);
 		}
 	}
 
-	private record OrderGroup(String id, List<BoxItem> items, long volume, long weight, long largestBox) {
+	private record OrderGroup(String id, List<BoxItem> items, long volume, long weight, long largestBox,
+			String stableKey) {
 	}
 
 	private static final class SearchState {
@@ -367,8 +383,8 @@ final class WholeOrderAssignmentSolver {
 			for (int i = 0; i < containers.size(); i++) {
 				destinations.add(i);
 			}
-			destinations.sort(Comparator.comparingDouble(i ->
-					(containerFillAfter(i, group))));
+			destinations.sort(Comparator.comparingDouble((Integer i) -> containerFillAfter(i, group))
+					.thenComparingInt(Integer::intValue));
 			Set<String> equivalentLoads = new HashSet<>();
 			for (int containerIndex : destinations) {
 				Container container = containers.get(containerIndex);

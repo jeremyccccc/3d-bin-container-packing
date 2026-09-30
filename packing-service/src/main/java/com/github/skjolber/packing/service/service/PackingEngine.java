@@ -1,7 +1,9 @@
 package com.github.skjolber.packing.service.service;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -42,9 +44,13 @@ class PackingEngine {
 	private static final int BLOCK_BEAM_INTENSIVE_WIDTH = 128;
 	private static final int BLOCK_BEAM_INTENSIVE_BRANCHING = 64;
 	private static final int BLOCK_BEAM_INTENSIVE_PROFILES = 2;
+	private static final int DEFAULT_CANDIDATE_PROBE_WINDOW = 8;
+	private static final int DEFAULT_CANDIDATE_PROBE_STATES = 8;
 	private static final AtomicLong SEARCH_SEQUENCE = new AtomicLong();
 
 	private final WholeOrderAssignmentSolver assignmentSolver = new WholeOrderAssignmentSolver();
+	private final WholeOrderCandidateSelector candidateSelector = new WholeOrderCandidateSelector();
+	private final WholeOrderCandidateProbeRanker candidateProbeRanker;
 	private final PlacementSupport.Policy supportPolicy;
 	private final boolean diagnosticsEnabled;
 	private final boolean blockBeamOnly;
@@ -55,6 +61,8 @@ class PackingEngine {
 	private final int tailCompactionBeamWidth;
 	private final int tailCompactionBranching;
 	private final int wholeOrderParallelism;
+	private final boolean candidateProbeEnabled;
+	private final int candidateProbeWindow;
 
 	PackingEngine() {
 		this(PlacementSupport.DEFAULT_POLICY, false, false,
@@ -75,12 +83,16 @@ class PackingEngine {
 			@Value("${packing.tail-compaction.search-millis:60000}") long tailCompactionSearchMillis,
 			@Value("${packing.tail-compaction.beam-width:32}") int tailCompactionBeamWidth,
 			@Value("${packing.tail-compaction.branching:32}") int tailCompactionBranching,
-			@Value("${packing.whole-order.parallelism:1}") int wholeOrderParallelism) {
+			@Value("${packing.whole-order.parallelism:1}") int wholeOrderParallelism,
+			@Value("${packing.whole-order.candidate-probe-enabled:true}") boolean candidateProbeEnabled,
+			@Value("${packing.whole-order.candidate-probe-window:8}") int candidateProbeWindow,
+			@Value("${packing.whole-order.candidate-probe-states:8}") int candidateProbeStates) {
 		this(new PlacementSupport.Policy(minimumAreaRatio, requireCenterSupport,
 				maximumOverhangMillimeters, maximumOverhangRatio), diagnosticsEnabled, blockBeamOnly,
 				WholeOrderAssignmentStrategy.parse(assignmentStrategy), assignmentTargetFillRatio,
 				tailCompactionEnabled, tailCompactionSearchMillis,
-				tailCompactionBeamWidth, tailCompactionBranching, wholeOrderParallelism);
+				tailCompactionBeamWidth, tailCompactionBranching, wholeOrderParallelism,
+				candidateProbeEnabled, candidateProbeWindow, candidateProbeStates);
 	}
 
 	PackingEngine(PlacementSupport.Policy supportPolicy) {
@@ -108,6 +120,17 @@ class PackingEngine {
 			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio,
 			boolean tailCompactionEnabled, long tailCompactionSearchMillis,
 			int tailCompactionBeamWidth, int tailCompactionBranching, int wholeOrderParallelism) {
+		this(supportPolicy, diagnosticsEnabled, blockBeamOnly, assignmentStrategy, assignmentTargetFillRatio,
+				tailCompactionEnabled, tailCompactionSearchMillis, tailCompactionBeamWidth,
+				tailCompactionBranching, wholeOrderParallelism, true,
+				DEFAULT_CANDIDATE_PROBE_WINDOW, DEFAULT_CANDIDATE_PROBE_STATES);
+	}
+
+	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
+			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio,
+			boolean tailCompactionEnabled, long tailCompactionSearchMillis,
+			int tailCompactionBeamWidth, int tailCompactionBranching, int wholeOrderParallelism,
+			boolean candidateProbeEnabled, int candidateProbeWindow, int candidateProbeStates) {
 		if (assignmentTargetFillRatio <= 0.0 || assignmentTargetFillRatio > 1.0) {
 			throw new IllegalArgumentException("packing.assignment.target-fill-ratio must be in (0, 1]");
 		}
@@ -116,6 +139,9 @@ class PackingEngine {
 		}
 		if (wholeOrderParallelism <= 0 || wholeOrderParallelism > 16) {
 			throw new IllegalArgumentException("packing.whole-order.parallelism must be in [1, 16]");
+		}
+		if (candidateProbeWindow <= 0 || candidateProbeStates <= 0) {
+			throw new IllegalArgumentException("candidate probe settings must be positive");
 		}
 		this.supportPolicy = supportPolicy;
 		this.diagnosticsEnabled = diagnosticsEnabled;
@@ -127,6 +153,9 @@ class PackingEngine {
 		this.tailCompactionBeamWidth = tailCompactionBeamWidth;
 		this.tailCompactionBranching = tailCompactionBranching;
 		this.wholeOrderParallelism = wholeOrderParallelism;
+		this.candidateProbeEnabled = candidateProbeEnabled;
+		this.candidateProbeWindow = candidateProbeWindow;
+		this.candidateProbeRanker = new WholeOrderCandidateProbeRanker(supportPolicy, candidateProbeStates);
 	}
 
 	PackagerResult pack(PackingPlan plan) {
@@ -210,53 +239,61 @@ class PackingEngine {
 		int attempted = 0;
 		int successful = 0;
 		int workerCount = Math.min(wholeOrderParallelism, Math.max(1, candidates.size()));
-		AtomicLong workerSequence = new AtomicLong();
-		ExecutorService executor = Executors.newFixedThreadPool(workerCount, runnable -> {
-			Thread thread = new Thread(runnable,
-					"packing-candidate-" + searchId + '-' + workerSequence.incrementAndGet());
-			thread.setDaemon(true);
-			return thread;
-		});
-		try {
-			search:
-			for (int batchStart = 0; batchStart < candidates.size()
-					&& System.currentTimeMillis() < deadline; batchStart += workerCount) {
-				List<Future<CandidateValidation>> futures = new ArrayList<>();
-				int batchEnd = Math.min(candidates.size(), batchStart + workerCount);
-				for (int candidateIndex = batchStart; candidateIndex < batchEnd; candidateIndex++) {
-					WholeOrderAssignmentSolver.Candidate candidate = candidates.get(candidateIndex);
-					int attempt = candidateIndex + 1;
-					futures.add(executor.submit(() -> validateCandidate(plan, physicalContainers,
-							candidate, attempt, searchId, deadline, cache)));
-					attempted++;
-				}
-				for (int futureIndex = 0; futureIndex < futures.size(); futureIndex++) {
-					long remainingMillis = deadline - System.currentTimeMillis();
-					if (remainingMillis <= 0L) break search;
-					try {
-						CandidateValidation validation = futures.get(futureIndex).get(
-								remainingMillis, TimeUnit.MILLISECONDS);
-						if (!validation.success()) continue;
-						successful++;
-						best = validation.result();
-						for (int cancel = futureIndex + 1; cancel < futures.size(); cancel++) {
-							futures.get(cancel).cancel(true);
+		if (workerCount == 1) {
+			WholeOrderSearchResult searchResult = searchAdaptive(plan, physicalContainers,
+					candidates, searchId, deadline, cache);
+			best = searchResult.result();
+			attempted = searchResult.attempted();
+			successful = best == null ? 0 : 1;
+		} else {
+			AtomicLong workerSequence = new AtomicLong();
+			ExecutorService executor = Executors.newFixedThreadPool(workerCount, runnable -> {
+				Thread thread = new Thread(runnable,
+						"packing-candidate-" + searchId + '-' + workerSequence.incrementAndGet());
+				thread.setDaemon(true);
+				return thread;
+			});
+			try {
+				search:
+				for (int batchStart = 0; batchStart < candidates.size()
+						&& System.currentTimeMillis() < deadline; batchStart += workerCount) {
+					List<Future<CandidateValidation>> futures = new ArrayList<>();
+					int batchEnd = Math.min(candidates.size(), batchStart + workerCount);
+					for (int candidateIndex = batchStart; candidateIndex < batchEnd; candidateIndex++) {
+						WholeOrderAssignmentSolver.Candidate candidate = candidates.get(candidateIndex);
+						int attempt = candidateIndex + 1;
+						futures.add(executor.submit(() -> validateCandidate(plan, physicalContainers,
+								candidate, attempt, searchId, deadline, cache)));
+						attempted++;
+					}
+					for (int futureIndex = 0; futureIndex < futures.size(); futureIndex++) {
+						long remainingMillis = deadline - System.currentTimeMillis();
+						if (remainingMillis <= 0L) break search;
+						try {
+							CandidateValidation validation = futures.get(futureIndex).get(
+									remainingMillis, TimeUnit.MILLISECONDS);
+							if (!validation.success()) continue;
+							successful++;
+							best = validation.result();
+							for (int cancel = futureIndex + 1; cancel < futures.size(); cancel++) {
+								futures.get(cancel).cancel(true);
+							}
+							break search;
+						} catch (InterruptedException e) {
+							Thread.currentThread().interrupt();
+							break search;
+						} catch (TimeoutException e) {
+							break search;
+						} catch (ExecutionException e) {
+							System.err.println("packing-service whole-order candidate-error searchId="
+									+ searchId + " attempt=" + (batchStart + futureIndex + 1)
+									+ " reason=" + e.getCause());
 						}
-						break search;
-					} catch (InterruptedException e) {
-						Thread.currentThread().interrupt();
-						break search;
-					} catch (TimeoutException e) {
-						break search;
-					} catch (ExecutionException e) {
-						System.err.println("packing-service whole-order candidate-error searchId="
-								+ searchId + " attempt=" + (batchStart + futureIndex + 1)
-								+ " reason=" + e.getCause());
 					}
 				}
+			} finally {
+				executor.shutdownNow();
 			}
-		} finally {
-			executor.shutdownNow();
 		}
 		WholeOrderPackingCache.Stats cacheStats = cache.stats();
 		System.out.println("packing-service whole-order candidates=" + candidates.size()
@@ -282,6 +319,107 @@ class PackingEngine {
 			}
 		}
 		return best;
+	}
+
+	private WholeOrderSearchResult searchAdaptive(PackingPlan plan,
+			List<ContainerItem> physicalContainers,
+			List<WholeOrderAssignmentSolver.Candidate> candidates,
+			long searchId, long deadline, WholeOrderPackingCache cache) {
+		if (candidateProbeEnabled) {
+			return searchWithCandidateProbe(plan, physicalContainers, candidates, searchId, deadline, cache);
+		}
+		return searchStaticOrder(plan, physicalContainers, candidates, searchId, deadline, cache);
+	}
+
+	private WholeOrderSearchResult searchStaticOrder(PackingPlan plan,
+			List<ContainerItem> physicalContainers,
+			List<WholeOrderAssignmentSolver.Candidate> candidates,
+			long searchId, long deadline, WholeOrderPackingCache cache) {
+		List<WholeOrderCandidateSelector.IndexedCandidate> remaining = new ArrayList<>(candidates.size());
+		for (int index = 0; index < candidates.size(); index++) {
+			remaining.add(new WholeOrderCandidateSelector.IndexedCandidate(candidates.get(index), index));
+		}
+		int attempted = 0;
+		while (!remaining.isEmpty() && System.currentTimeMillis() < deadline) {
+			WholeOrderCandidateSelector.Selection selection = candidateSelector.select(
+					remaining, physicalContainers, cache);
+			if (selection.indexed() == null) {
+				System.out.println("packing-service whole-order adaptive-stop searchId=" + searchId
+						+ " reason=all-remaining-contain-proven-failure"
+						+ " remaining=" + remaining.size());
+				break;
+			}
+			WholeOrderCandidateSelector.IndexedCandidate indexed = selection.indexed();
+			remaining.remove(indexed);
+			attempted++;
+			System.out.println("packing-service whole-order adaptive-select searchId=" + searchId
+					+ " attempt=" + attempted + " originalRank=" + (indexed.originalIndex() + 1)
+					+ " source=" + safe(indexed.candidate().source())
+					+ " cachedSuccesses=" + selection.evidence().successes()
+					+ " cachedSavedMs=" + selection.evidence().savedMillis()
+					+ " prunedByFailure=" + selection.pruned());
+			CandidateValidation validation = validateCandidate(plan, physicalContainers,
+					indexed.candidate(), attempted, searchId, deadline, cache);
+			if (validation.success()) return new WholeOrderSearchResult(validation.result(), attempted);
+		}
+		return new WholeOrderSearchResult(null, attempted);
+	}
+
+	private WholeOrderSearchResult searchWithCandidateProbe(PackingPlan plan,
+			List<ContainerItem> physicalContainers,
+			List<WholeOrderAssignmentSolver.Candidate> candidates,
+			long searchId, long deadline, WholeOrderPackingCache cache) {
+		List<WholeOrderCandidateSelector.IndexedCandidate> remaining = new ArrayList<>(candidates.size());
+		for (int index = 0; index < candidates.size(); index++) {
+			remaining.add(new WholeOrderCandidateSelector.IndexedCandidate(candidates.get(index), index));
+		}
+		Deque<WholeOrderCandidateProbeRanker.ProbedCandidate> window = new ArrayDeque<>();
+		int attempted = 0;
+		int pruned = 0;
+		while ((!remaining.isEmpty() || !window.isEmpty()) && System.currentTimeMillis() < deadline) {
+			while (!window.isEmpty() && candidateSelector.containsProvenFailure(
+					window.peekFirst().indexed().candidate(), physicalContainers, cache)) {
+				window.removeFirst();
+				pruned++;
+			}
+			if (window.isEmpty()) {
+				List<WholeOrderCandidateSelector.IndexedCandidate> probeCandidates = new ArrayList<>();
+				while (!remaining.isEmpty() && probeCandidates.size() < candidateProbeWindow) {
+					WholeOrderCandidateSelector.IndexedCandidate indexed = remaining.remove(0);
+					if (candidateSelector.containsProvenFailure(indexed.candidate(), physicalContainers, cache)) {
+						pruned++;
+						continue;
+					}
+					probeCandidates.add(indexed);
+				}
+				if (probeCandidates.isEmpty()) continue;
+				List<WholeOrderCandidateProbeRanker.ProbedCandidate> ranked = candidateProbeRanker.rank(
+						probeCandidates, physicalContainers, cache, searchId);
+				for (WholeOrderCandidateProbeRanker.ProbedCandidate probed : ranked) {
+					if (probed.score().provenFailure()) pruned++;
+					else window.addLast(probed);
+				}
+				System.out.println("packing-service whole-order candidate-probe-window searchId=" + searchId
+						+ " size=" + probeCandidates.size()
+						+ " ranked=" + window.stream()
+								.map(value -> Integer.toString(value.indexed().originalIndex() + 1)).toList()
+						+ " pruned=" + pruned);
+				continue;
+			}
+			WholeOrderCandidateProbeRanker.ProbedCandidate probed = window.removeFirst();
+			WholeOrderCandidateSelector.IndexedCandidate indexed = probed.indexed();
+			attempted++;
+			System.out.println("packing-service whole-order adaptive-select searchId=" + searchId
+					+ " attempt=" + attempted + " originalRank=" + (indexed.originalIndex() + 1)
+					+ " source=" + safe(indexed.candidate().source())
+					+ " probeMinVolume=" + rounded(probed.score().minimumVolumeCompletion())
+					+ " probeAvgVolume=" + rounded(probed.score().averageVolumeCompletion())
+					+ " prunedByFailure=" + pruned);
+			CandidateValidation validation = validateCandidate(plan, physicalContainers,
+					indexed.candidate(), attempted, searchId, deadline, cache);
+			if (validation.success()) return new WholeOrderSearchResult(validation.result(), attempted);
+		}
+		return new WholeOrderSearchResult(null, attempted);
 	}
 
 	private CandidateValidation validateCandidate(PackingPlan plan, List<ContainerItem> physicalContainers,
@@ -647,6 +785,9 @@ class PackingEngine {
 	}
 
 	private record CandidateValidation(boolean success, PackagerResult result) {
+	}
+
+	private record WholeOrderSearchResult(PackagerResult result, int attempted) {
 	}
 
 	private PackagerResult tryMacroPacks(PackingPlan plan, List<ContainerItem> containers,

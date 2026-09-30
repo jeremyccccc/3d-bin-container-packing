@@ -3,8 +3,12 @@ package com.github.skjolber.packing.service.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 import org.junit.jupiter.api.Test;
@@ -14,6 +18,26 @@ import com.github.skjolber.packing.api.BoxItem;
 import com.github.skjolber.packing.service.dto.PackingRequest;
 
 class WholeOrderCandidateScorerTest {
+
+	@Test
+	void candidateGenerationDoesNotDependOnHouseBillOrder() throws Exception {
+		PackingPlan ascending = plan();
+		List<List<BoxItem>> reversedGroups = groups(ascending);
+		Collections.reverse(reversedGroups);
+		PackingPlan descending = withGroups(ascending, reversedGroups);
+		List<List<BoxItem>> shuffledGroups = groups(ascending);
+		Collections.shuffle(shuffledGroups, new Random(987654321L));
+		PackingPlan shuffled = withGroups(ascending, shuffledGroups);
+
+		WholeOrderAssignmentSolver solver = new WholeOrderAssignmentSolver();
+		for (WholeOrderAssignmentStrategy strategy : WholeOrderAssignmentStrategy.values()) {
+			List<String> expected = candidateViews(solver.candidates(ascending, strategy, 0.85));
+			assertThat(candidateViews(solver.candidates(descending, strategy, 0.85)))
+					.as("descending %s candidates", strategy).containsExactlyElementsOf(expected);
+			assertThat(candidateViews(solver.candidates(shuffled, strategy, 0.85)))
+					.as("shuffled %s candidates", strategy).containsExactlyElementsOf(expected);
+		}
+	}
 
 	@Test
 	void ranksCandidatesDeterministicallyByAscendingGeometryRisk() throws Exception {
@@ -131,6 +155,33 @@ class WholeOrderCandidateScorerTest {
 		return String.join("|", containers);
 	}
 
+	private static List<List<BoxItem>> groups(PackingPlan plan) {
+		Map<String, List<BoxItem>> groups = new LinkedHashMap<>();
+		for (BoxItem item : plan.boxItems()) {
+			String id = item.getBox().getProperty(PackingMapper.PROP_HOUSE_BS_ID);
+			groups.computeIfAbsent(id, ignored -> new ArrayList<>()).add(item);
+		}
+		return groups.values().stream().map(List::copyOf).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+	}
+
+	private static PackingPlan withGroups(PackingPlan plan, List<List<BoxItem>> groups) {
+		List<BoxItem> items = groups.stream().flatMap(List::stream).toList();
+		return new PackingPlan(plan.requestedContainers(), plan.containerItems(), List.copyOf(items),
+				plan.cargoLines(), plan.warnings());
+	}
+
+	private static List<String> candidateViews(List<WholeOrderAssignmentSolver.Candidate> candidates) {
+		return candidates.stream().map(candidate -> candidate.signature()
+				+ "|source=" + candidate.source()
+				+ "|generation=" + candidate.generationIndex()
+				+ "|score=" + Double.doubleToLongBits(candidate.score().total())
+				+ "|validation=" + candidate.score().validationOrder()
+				+ "|items=" + candidate.itemsByContainer().stream()
+						.map(items -> items.stream().map(PackingDeterminism::boxItemKey).toList().toString())
+						.toList())
+				.toList();
+	}
+
 	private static PackingPlan plan() throws Exception {
 		PackingRequest request = new ObjectMapper().readValue("""
 				{
@@ -141,9 +192,13 @@ class WholeOrderCandidateScorerTest {
 				    {"id":"C3","size":20,"type":"GP"}
 				  ],
 				  "houseBillList":[
-				    {"houseBsId":"H1","totalNum":12,"totalWeight":120,"totalMeas":12,
-				     "items":[{"inboundId":"I1","num":12,"weight":120,"meas":12,
-				       "size":{"length":100,"width":100,"height":100}}]},
+				    {"houseBsId":"H1","totalNum":15,"totalWeight":123,"totalMeas":12.375,
+				     "items":[
+				       {"inboundId":"I1-B","num":3,"weight":3,"meas":0.375,
+				        "size":{"length":50,"width":50,"height":50}},
+				       {"inboundId":"I1-A","num":12,"weight":120,"meas":12,
+				        "size":{"length":100,"width":100,"height":100}}
+				     ]},
 				    {"houseBsId":"H2","totalNum":8,"totalWeight":80,"totalMeas":8,
 				     "items":[{"inboundId":"I2","num":8,"weight":80,"meas":8,
 				       "size":{"length":200,"width":100,"height":50}}]},

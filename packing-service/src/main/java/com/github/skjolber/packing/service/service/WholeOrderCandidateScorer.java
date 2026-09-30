@@ -25,6 +25,7 @@ final class WholeOrderCandidateScorer {
 		}
 		ranked.sort(Comparator
 				.comparingDouble((WholeOrderAssignmentSolver.Candidate candidate) -> candidate.score().total())
+				.thenComparing(WholeOrderAssignmentSolver.Candidate::signature)
 				.thenComparingInt(WholeOrderAssignmentSolver.Candidate::generationIndex));
 		return List.copyOf(ranked);
 	}
