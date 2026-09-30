@@ -51,12 +51,13 @@ class PackingEngineDiagnosticsTest {
 				"whole-order container-start searchId=",
 				"houseBillIds=",
 				"BLOCK-BEAM searchId=",
-				"phase=candidate-probe",
-				"whole-order candidate-probe-window searchId=",
 				"whole-order container-end searchId=",
 				"whole-order candidate-end searchId=",
-				"whole-order cache-hit searchId=",
+				"whole-order cache-miss searchId=",
 				"cacheHits=",
 				"termination=");
+		assertThat(log).doesNotContain(
+				"phase=candidate-probe",
+				"whole-order candidate-probe-window searchId=");
 	}
 }

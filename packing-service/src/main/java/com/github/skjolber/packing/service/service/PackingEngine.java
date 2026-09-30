@@ -84,7 +84,7 @@ class PackingEngine {
 			@Value("${packing.tail-compaction.beam-width:32}") int tailCompactionBeamWidth,
 			@Value("${packing.tail-compaction.branching:32}") int tailCompactionBranching,
 			@Value("${packing.whole-order.parallelism:1}") int wholeOrderParallelism,
-			@Value("${packing.whole-order.candidate-probe-enabled:true}") boolean candidateProbeEnabled,
+			@Value("${packing.whole-order.candidate-probe-enabled:false}") boolean candidateProbeEnabled,
 			@Value("${packing.whole-order.candidate-probe-window:8}") int candidateProbeWindow,
 			@Value("${packing.whole-order.candidate-probe-states:8}") int candidateProbeStates) {
 		this(new PlacementSupport.Policy(minimumAreaRatio, requireCenterSupport,
@@ -122,7 +122,7 @@ class PackingEngine {
 			int tailCompactionBeamWidth, int tailCompactionBranching, int wholeOrderParallelism) {
 		this(supportPolicy, diagnosticsEnabled, blockBeamOnly, assignmentStrategy, assignmentTargetFillRatio,
 				tailCompactionEnabled, tailCompactionSearchMillis, tailCompactionBeamWidth,
-				tailCompactionBranching, wholeOrderParallelism, true,
+				tailCompactionBranching, wholeOrderParallelism, false,
 				DEFAULT_CANDIDATE_PROBE_WINDOW, DEFAULT_CANDIDATE_PROBE_STATES);
 	}
 
