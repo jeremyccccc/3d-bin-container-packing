@@ -23,7 +23,9 @@ class PackingMapper {
 
 	static final String PROP_CARGO_ID = "cargoId";
 	static final String PROP_HOUSE_BS_ID = "houseBsId";
+	static final String PROP_HOUSE_BS_NO = "houseBsNo";
 	static final String PROP_INBOUND_ID = "inboundId";
+	static final String PROP_INBOUND_NO = "inboundNo";
 	static final String PROP_CUSTOMER = "customer";
 	static final String PROP_HEIGHT_POSITION = "heightPosition";
 	static final String PROP_NO_PRESS = "noPress";
@@ -55,24 +57,28 @@ class PackingMapper {
 	private static List<ContainerItem> toContainerItems(List<ContainerDto> input, List<String> warnings) {
 		List<ContainerItem> items = new ArrayList<>();
 		for (ContainerDto container : nullToEmpty(input)) {
-			ContainerSpec spec = spec(container);
-			if (spec == null) {
+			ContainerItem mapped = toContainerItem(container);
+			if (mapped == null) {
 				warnings.add("UNSUPPORTED_CONTAINER_SKIPPED id=" + container.id() + " size=" + container.size() + " type=" + container.type());
 				continue;
 			}
-
-			Container mapped = Container
-					.newBuilder()
-					.withId(container.id())
-					.withDescription(container.size() + container.type().toUpperCase(Locale.ROOT))
-					.withSize(scaleCm(spec.lengthCm()), scaleCm(spec.widthCm()), scaleCm(spec.heightCm()))
-					.withEmptyWeight(0)
-					.withMaxLoadWeight(spec.maxLoadKg() * WEIGHT_SCALE)
-					.build();
-
-			items.add(new ContainerItem(mapped, 1));
+			items.add(mapped);
 		}
 		return items;
+	}
+
+	static ContainerItem toContainerItem(ContainerDto container) {
+		ContainerSpec spec = spec(container);
+		if (spec == null) return null;
+		Container mapped = Container
+				.newBuilder()
+				.withId(container.id())
+				.withDescription(container.size() + container.type().toUpperCase(Locale.ROOT))
+				.withSize(scaleCm(spec.lengthCm()), scaleCm(spec.widthCm()), scaleCm(spec.heightCm()))
+				.withEmptyWeight(0)
+				.withMaxLoadWeight(spec.maxLoadKg() * WEIGHT_SCALE)
+				.build();
+		return new ContainerItem(mapped, 1);
 	}
 
 	private static ContainerSpec spec(ContainerDto container) {
@@ -96,6 +102,7 @@ class PackingMapper {
 				lines.add(new CargoLine(
 						cargoId,
 						houseBill.houseBsId(),
+						houseBill.houseBsNo(),
 						houseBill.desc(),
 						houseBill.customer(),
 						rule.heightPosition(),
@@ -124,7 +131,9 @@ class PackingMapper {
 					.withRotate3D()
 					.withProperty(PROP_CARGO_ID, line.cargoId())
 					.withProperty(PROP_HOUSE_BS_ID, line.houseBsId())
+					.withProperty(PROP_HOUSE_BS_NO, displayNo(line.houseBsNo(), line.houseBsId()))
 					.withProperty(PROP_INBOUND_ID, line.item().inboundId())
+					.withProperty(PROP_INBOUND_NO, displayNo(line.item().inboundNo(), line.item().inboundId()))
 					.withProperty(PROP_CUSTOMER, line.customer())
 					.withProperty(PROP_HEIGHT_POSITION, line.heightPosition())
 					.withProperty(PROP_NO_PRESS, line.noPress())
@@ -133,6 +142,10 @@ class PackingMapper {
 			items.add(new BoxItem(box, line.calculatedQuantity()));
 		}
 		return items;
+	}
+
+	private static String displayNo(String number, String id) {
+		return number != null && !number.isBlank() ? number : id;
 	}
 
 	private static PackingRuleDto validateRule(HouseBillDto houseBill) {

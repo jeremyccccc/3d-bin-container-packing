@@ -10,6 +10,8 @@ import com.github.skjolber.packing.api.Box;
 import com.github.skjolber.packing.api.BoxItem;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.PackagerResult;
+import com.github.skjolber.packing.api.Placement;
+import com.github.skjolber.packing.ep.points3d.DefaultPoint3D;
 
 class BlockBeamSearchPackagerTest {
 
@@ -38,6 +40,98 @@ class BlockBeamSearchPackagerTest {
 				.pack(container, List.of(new BoxItem(box, 2)), 0L);
 
 		assertThat(result).isNull();
+	}
+
+	@Test
+	void tracksMaximumPackedVolumeForAnIncompleteSearch() {
+		Container container = container(100, 100, 100);
+		Box box = Box.newBuilder().withId("large").withSize(80, 80, 80)
+				.withWeight(1).withRotate3D().build();
+		BlockBeamSearchPackager.SearchSession session = new BlockBeamSearchPackager(8, 8)
+				.newSession(container, List.of(new BoxItem(box, 2)), " test=elite-volume");
+
+		BlockBeamSearchPackager.SearchProgress progress = session.advance(0L);
+
+		assertThat(progress.complete()).isFalse();
+		assertThat(progress.packedUnits()).isEqualTo(1);
+		assertThat(progress.packedVolume()).isEqualTo(box.getVolume());
+		assertThat(progress.totalVolume()).isEqualTo(box.getVolume() * 2L);
+		assertThat(progress.volumeCompletionRatio()).isEqualTo(0.5);
+		assertThat(progress.eliteStates()).isPositive();
+	}
+
+	@Test
+	void probeStopsAtAStableExpandedStateBudget() {
+		Container container = container(200, 200, 200);
+		Box first = Box.newBuilder().withId("first").withSize(100, 100, 100)
+				.withWeight(1).withRotate3D().build();
+		Box second = Box.newBuilder().withId("second").withSize(80, 80, 80)
+				.withWeight(1).withRotate3D().build();
+		BlockBeamSearchPackager packager = new BlockBeamSearchPackager(12, 10);
+		List<BoxItem> items = List.of(new BoxItem(first, 5), new BoxItem(second, 5));
+
+		BlockBeamSearchPackager.SearchProgress firstProbe = packager.probe(
+				container, items, 1, " test=probe-first");
+		BlockBeamSearchPackager.SearchProgress secondProbe = packager.probe(
+				container, items, 1, " test=probe-second");
+
+		assertThat(firstProbe.expandedStates()).isEqualTo(1);
+		assertThat(secondProbe.expandedStates()).isEqualTo(1);
+		assertThat(secondProbe.packedUnits()).isEqualTo(firstProbe.packedUnits());
+		assertThat(secondProbe.packedVolume()).isEqualTo(firstProbe.packedVolume());
+		assertThat(secondProbe.generatedStates()).isEqualTo(firstProbe.generatedStates());
+	}
+
+	@Test
+	void packsARegularBlockOnTopOfAFixedLayout() {
+		Container container = container(1200, 1000, 1200);
+		Placement platform = placement("platform", 0, 0, 0, 1100, 900, 100);
+		Box box = Box.newBuilder().withId("316901").withSize(500, 390, 250)
+				.withWeight(1).withRotate3D().build();
+
+		PackagerResult result = new BlockBeamSearchPackager(32, 32)
+				.pack(container, List.of(new BoxItem(box, 12)), List.of(platform), 0L, " test=fixed");
+
+		assertThat(result).isNotNull();
+		assertThat(result.isSuccess()).isTrue();
+		assertThat(result.get(0).getStack().getPlacements()).hasSize(13);
+		assertThat(result.get(0).getStack().getPlacements().get(0)).isSameAs(platform);
+		assertThat(PlacementSupport.validate(result, PlacementSupport.DEFAULT_POLICY).valid()).isTrue();
+		assertThat(result.get(0).getStack().getPlacements().stream()
+				.filter(placement -> placement != platform)
+				.noneMatch(platform::intersects)).isTrue();
+	}
+
+	@Test
+	void fixedLayoutInsertionStillRejectsUnsupportedCargo() {
+		Container container = container(200, 200, 200);
+		Placement narrowPlatform = placement("platform", 0, 0, 0, 80, 80, 100);
+		Box box = Box.newBuilder().withId("overhang").withSize(200, 200, 100)
+				.withWeight(1).build();
+
+		PackagerResult result = new BlockBeamSearchPackager(16, 16)
+				.pack(container, List.of(new BoxItem(box, 1)), List.of(narrowPlatform), 0L,
+						" test=fixed-support");
+
+		assertThat(result).isNull();
+	}
+
+	@Test
+	void resumesAPausedSearchInsteadOfStartingOver() {
+		Container container = container(200, 200, 200);
+		Box box = Box.newBuilder().withId("cube").withSize(100, 100, 100)
+				.withWeight(1).withRotate3D().build();
+		BlockBeamSearchPackager packager = new BlockBeamSearchPackager(12, 10);
+		BlockBeamSearchPackager.SearchSession session = packager.newSession(
+				container, List.of(new BoxItem(box, 8)), " test=resume");
+
+		BlockBeamSearchPackager.SearchProgress paused = session.advance(System.currentTimeMillis());
+		BlockBeamSearchPackager.SearchProgress completed = session.advance(0L);
+
+		assertThat(paused.complete()).isFalse();
+		assertThat(paused.exhausted()).isFalse();
+		assertThat(completed.complete()).isTrue();
+		assertThat(completed.result().get(0).getStack().getPlacements()).hasSize(8);
 	}
 
 	@Test
@@ -89,5 +183,11 @@ class BlockBeamSearchPackagerTest {
 	private static Container container(int dx, int dy, int dz) {
 		return Container.newBuilder().withId("container").withSize(dx, dy, dz)
 				.withMaxLoadWeight(10000).build();
+	}
+
+	private static Placement placement(String id, int x, int y, int z, int dx, int dy, int dz) {
+		Box box = Box.newBuilder().withId(id).withSize(dx, dy, dz).withWeight(1).build();
+		return new Placement(box.getStackValues()[0],
+				new DefaultPoint3D(x, y, z, x + dx - 1, y + dy - 1, z + dz - 1));
 	}
 }

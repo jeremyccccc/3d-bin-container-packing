@@ -58,14 +58,20 @@ public class PackingService {
 				return response(request, true, "装箱成功", plan.warnings(), null, null, emptyAllocations(plan.requestedContainers()));
 			}
 
-			PackagerResult result = engine.pack(plan);
+			PackingOutcome outcome = engine.packOutcome(plan);
+			PackagerResult result = outcome.result();
 			if (result == null || !result.isSuccess()) {
 				return response(request, false, "装箱失败", plan.warnings(), null, null, emptyAllocations(plan.requestedContainers()));
 			}
 
 			String resultId = visualizationStore.newResultId();
 			String viewerUrl = viewerUrl(viewerBaseUrl, resultId);
-			PackingResponse response = response(request, true, "装箱成功", plan.warnings(), resultId, viewerUrl, toAllocations(plan, result));
+			PackingPlan resultPlan = outcome.plan();
+			boolean success = outcome.targetAchieved();
+			String message = success ? "装箱成功"
+					: "装箱失败：可查看" + result.size() + "柜布局";
+			PackingResponse response = response(request, success, message, resultPlan.warnings(), resultId,
+					viewerUrl, toAllocations(resultPlan, result, outcome.fallbackUsed() && success));
 			visualizationStore.save(resultId, request, response, result);
 			return response;
 		} catch (Exception e) {
@@ -102,7 +108,8 @@ public class PackingService {
 		return viewerBaseUrl.replaceAll("/+$", "") + path;
 	}
 
-	private static List<AllocatedContainerDto> toAllocations(PackingPlan plan, PackagerResult result) {
+	private static List<AllocatedContainerDto> toAllocations(PackingPlan plan, PackagerResult result,
+			boolean actualContainersOnly) {
 		Map<String, Map<String, Integer>> allocatedUnits = countAllocatedUnits(result);
 		Map<String, CargoLine> linesById = new HashMap<>();
 		for (CargoLine line : plan.cargoLines()) {
@@ -112,6 +119,7 @@ public class PackingService {
 		Map<String, Map<String, Integer>> allocatedNum = distributeOriginalNum(plan.cargoLines(), allocatedUnits);
 		List<AllocatedContainerDto> containers = new ArrayList<>();
 		for (ContainerDto requested : plan.requestedContainers()) {
+			if (actualContainersOnly && !allocatedUnits.containsKey(requested.id())) continue;
 			Map<String, Integer> cargoUnits = allocatedUnits.getOrDefault(requested.id(), Map.of());
 			Map<String, Integer> cargoNums = allocatedNum.getOrDefault(requested.id(), Map.of());
 			containers.add(new AllocatedContainerDto(

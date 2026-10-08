@@ -4,6 +4,7 @@ import java.util.List;
 
 public record HouseBillDto(
 		String houseBsId,
+		String houseBsNo,
 		String desc,
 		String customer,
 		PackingRuleDto rule,

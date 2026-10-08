@@ -5,6 +5,7 @@ import com.github.skjolber.packing.service.dto.HouseBillItemDto;
 record CargoLine(
 		String cargoId,
 		String houseBsId,
+		String houseBsNo,
 		String desc,
 		String customer,
 		int heightPosition,
