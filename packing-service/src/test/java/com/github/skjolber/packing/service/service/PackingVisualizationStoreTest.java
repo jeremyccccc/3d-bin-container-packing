@@ -35,13 +35,32 @@ class PackingVisualizationStoreTest {
 
 		JsonNode savedRoot = objectMapper.readTree(saved.toFile());
 		assertThat(savedRoot.path("masterBsId").asText()).isEqualTo("M1");
+		assertThat(savedRoot.path("masterNo").asText()).isEqualTo("MBL-001");
 		assertThat(savedRoot.path("request").path("masterBsId").asText()).isEqualTo("M1");
 		assertThat(savedRoot.path("response").path("resultId").asText()).isEqualTo(response.resultId());
 
 		JsonNode visualization = store.findVisualization(response.resultId()).orElseThrow();
+		assertThat(visualization.path("masterNo").asText()).isEqualTo("MBL-001");
 		assertThat(visualization.path("containers")).hasSize(1);
 		assertThat(visualization.path("containers").get(0).path("stack").path("placements")).hasSize(1);
-		assertThat(visualization.path("containers").get(0).path("stack").path("placements").get(0).path("stackable").path("id").asText())
+		JsonNode placement = visualization.path("containers").get(0)
+				.path("stack").path("placements").get(0);
+		assertThat(placement.path("houseBsId").asText()).isEqualTo("H1");
+		assertThat(placement.path("houseBsNo").asText()).isEqualTo("HBL-001");
+		assertThat(placement.path("inboundId").asText()).isEqualTo("I1");
+		assertThat(placement.path("inboundNo").asText()).isEqualTo("IN-001");
+		assertThat(placement.path("customer").asText()).isEqualTo("ACME");
+		assertThat(placement.path("description").asText()).isEqualTo("cargo");
+		assertThat(placement.path("unitWeightKg").asDouble()).isEqualTo(1.0);
+		assertThat(placement.path("unitVolumeM3").asDouble()).isEqualTo(0.001);
+		assertThat(placement.path("originalDx").asInt()).isEqualTo(100);
+		assertThat(placement.path("originalDy").asInt()).isEqualTo(100);
+		assertThat(placement.path("originalDz").asInt()).isEqualTo(100);
+		assertThat(placement.path("heightPosition").asInt()).isZero();
+		assertThat(placement.path("noPress").asBoolean()).isFalse();
+		assertThat(placement.path("doorSide").asBoolean()).isFalse();
+		assertThat(placement.path("stackable").path("name").asText()).isEqualTo("HBL-001 IN-001");
+		assertThat(placement.path("stackable").path("id").asText())
 				.endsWith("|1");
 	}
 
@@ -57,9 +76,11 @@ class PackingVisualizationStoreTest {
 		return objectMapper.readValue("""
 				{
 				  "masterBsId":"M1",
+				  "masterNo":"MBL-001",
 				  "containerLists":[{"id":"C1","size":40,"type":"HQ"}],
 				  "houseBillList":[{
 				    "houseBsId":"H1",
+				    "houseBsNo":"HBL-001",
 				    "desc":"cargo",
 				    "customer":"ACME",
 				    "rule":{"CustomerMode":0,"HeightPosition":0,"DoorSide":false,"Method":0,"FlatHeight":null},
@@ -68,6 +89,7 @@ class PackingVisualizationStoreTest {
 				    "totalMeas":0.001,
 				    "items":[{
 				      "inboundId":"I1",
+				      "inboundNo":"IN-001",
 				      "num":1,
 				      "weight":1,
 				      "meas":0.001,

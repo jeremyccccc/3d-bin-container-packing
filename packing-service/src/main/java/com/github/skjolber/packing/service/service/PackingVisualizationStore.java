@@ -71,10 +71,11 @@ public class PackingVisualizationStore {
 		ObjectNode root = objectMapper.createObjectNode();
 		root.put("resultId", resultId);
 		root.put("masterBsId", request != null ? request.masterBsId() : null);
+		root.put("masterNo", request != null ? request.masterNo() : null);
 		root.put("createdAt", OffsetDateTime.now().toString());
 		root.set("request", objectMapper.valueToTree(request));
 		root.set("response", objectMapper.valueToTree(response));
-		root.set("visualization", toVisualization(result.getContainers()));
+		root.set("visualization", toVisualization(result.getContainers(), request));
 
 		objectMapper.writerWithDefaultPrettyPrinter().writeValue(file(resultId).toFile(), root);
 	}
@@ -92,7 +93,13 @@ public class PackingVisualizationStore {
 	}
 
 	ObjectNode toVisualization(List<Container> containers) {
+		return toVisualization(containers, null);
+	}
+
+	ObjectNode toVisualization(List<Container> containers, PackingRequest request) {
 		ObjectNode root = objectMapper.createObjectNode();
+		root.put("masterBsId", request != null ? request.masterBsId() : null);
+		root.put("masterNo", request != null ? displayNo(request.masterNo(), request.masterBsId()) : null);
 		ArrayNode containerNodes = root.putArray("containers");
 		int step = 0;
 		for (Container container : containers) {
@@ -115,11 +122,21 @@ public class PackingVisualizationStore {
 
 			Map<String, Integer> pieceIndexes = new HashMap<>();
 			for (Placement placement : container.getStack().getPlacements()) {
+				var box = placement.getBox();
 				String cargoId = placement.getBox().getProperty(PackingMapper.PROP_CARGO_ID);
 				String houseBsId = placement.getBox().getProperty(PackingMapper.PROP_HOUSE_BS_ID);
+				String houseBsNo = placement.getBox().getProperty(PackingMapper.PROP_HOUSE_BS_NO);
 				String inboundId = placement.getBox().getProperty(PackingMapper.PROP_INBOUND_ID);
+				String inboundNo = placement.getBox().getProperty(PackingMapper.PROP_INBOUND_NO);
 				String customer = placement.getBox().getProperty(PackingMapper.PROP_CUSTOMER);
+				Integer heightPosition = placement.getBox().getProperty(PackingMapper.PROP_HEIGHT_POSITION);
+				Boolean noPress = placement.getBox().getProperty(PackingMapper.PROP_NO_PRESS);
+				Boolean doorSide = placement.getBox().getProperty(PackingMapper.PROP_DOOR_SIDE);
+				houseBsNo = displayNo(houseBsNo, houseBsId);
+				inboundNo = displayNo(inboundNo, inboundId);
 				int pieceIndex = pieceIndexes.merge(cargoId, 1, Integer::sum);
+				var original = box.getStackValue(0);
+				var placed = placement.getStackValue();
 
 				ObjectNode placementNode = placementNodes.addObject();
 				placementNode.put("step", step);
@@ -128,8 +145,19 @@ public class PackingVisualizationStore {
 				placementNode.put("y", placement.getAbsoluteY());
 				placementNode.put("z", placement.getAbsoluteZ());
 				placementNode.put("houseBsId", houseBsId);
+				placementNode.put("houseBsNo", houseBsNo);
 				placementNode.put("inboundId", inboundId);
+				placementNode.put("inboundNo", inboundNo);
 				placementNode.put("customer", customer);
+				placementNode.put("description", box.getDescription());
+				placementNode.put("unitWeightKg", box.getWeight() / 1000.0);
+				placementNode.put("unitVolumeM3", box.getVolume() / 1_000_000_000.0);
+				placementNode.put("originalDx", original.getDx());
+				placementNode.put("originalDy", original.getDy());
+				placementNode.put("originalDz", original.getDz());
+				placementNode.put("heightPosition", heightPosition != null ? heightPosition : 0);
+				placementNode.put("noPress", Boolean.TRUE.equals(noPress));
+				placementNode.put("doorSide", Boolean.TRUE.equals(doorSide));
 				placementNode.put("cargoId", cargoId);
 				placementNode.put("pieceIndex", pieceIndex);
 				placementNode.putArray("points");
@@ -138,14 +166,18 @@ public class PackingVisualizationStore {
 				stackableNode.put("step", step++);
 				stackableNode.putArray("plugins");
 				stackableNode.put("id", cargoId + "|" + pieceIndex);
-				stackableNode.put("name", houseBsId + " " + inboundId);
-				stackableNode.put("dx", placement.getStackValue().getDx());
-				stackableNode.put("dy", placement.getStackValue().getDy());
-				stackableNode.put("dz", placement.getStackValue().getDz());
+				stackableNode.put("name", houseBsNo + " " + inboundNo);
+				stackableNode.put("dx", placed.getDx());
+				stackableNode.put("dy", placed.getDy());
+				stackableNode.put("dz", placed.getDz());
 				stackableNode.put("type", "box");
 			}
 		}
 		return root;
+	}
+
+	private static String displayNo(String number, String id) {
+		return number != null && !number.isBlank() ? number : id;
 	}
 
 	private Path file(String resultId) {

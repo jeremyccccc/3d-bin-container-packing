@@ -23,7 +23,9 @@ class PackingMapper {
 
 	static final String PROP_CARGO_ID = "cargoId";
 	static final String PROP_HOUSE_BS_ID = "houseBsId";
+	static final String PROP_HOUSE_BS_NO = "houseBsNo";
 	static final String PROP_INBOUND_ID = "inboundId";
+	static final String PROP_INBOUND_NO = "inboundNo";
 	static final String PROP_CUSTOMER = "customer";
 	static final String PROP_HEIGHT_POSITION = "heightPosition";
 	static final String PROP_NO_PRESS = "noPress";
@@ -100,6 +102,7 @@ class PackingMapper {
 				lines.add(new CargoLine(
 						cargoId,
 						houseBill.houseBsId(),
+						houseBill.houseBsNo(),
 						houseBill.desc(),
 						houseBill.customer(),
 						rule.heightPosition(),
@@ -128,7 +131,9 @@ class PackingMapper {
 					.withRotate3D()
 					.withProperty(PROP_CARGO_ID, line.cargoId())
 					.withProperty(PROP_HOUSE_BS_ID, line.houseBsId())
+					.withProperty(PROP_HOUSE_BS_NO, displayNo(line.houseBsNo(), line.houseBsId()))
 					.withProperty(PROP_INBOUND_ID, line.item().inboundId())
+					.withProperty(PROP_INBOUND_NO, displayNo(line.item().inboundNo(), line.item().inboundId()))
 					.withProperty(PROP_CUSTOMER, line.customer())
 					.withProperty(PROP_HEIGHT_POSITION, line.heightPosition())
 					.withProperty(PROP_NO_PRESS, line.noPress())
@@ -137,6 +142,10 @@ class PackingMapper {
 			items.add(new BoxItem(box, line.calculatedQuantity()));
 		}
 		return items;
+	}
+
+	private static String displayNo(String number, String id) {
+		return number != null && !number.isBlank() ? number : id;
 	}
 
 	private static PackingRuleDto validateRule(HouseBillDto houseBill) {

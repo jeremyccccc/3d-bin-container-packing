@@ -20,27 +20,54 @@
 		.container-button:hover { background: rgba(255,255,255,0.12); }
 		.container-button.active { color: #fff; background: #1769aa; border-color: #4aa3df; }
 		.help { margin-top: 12px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,0.1); }
+		.detail-panel { position: fixed; right: 16px; top: 16px; width: 320px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto; padding: 12px 14px; background: rgba(16, 20, 24, 0.9); border: 1px solid rgba(255, 209, 102, 0.5); border-radius: 8px; backdrop-filter: blur(8px); box-shadow: 0 12px 32px rgba(0,0,0,0.32); }
+		.detail-panel[hidden] { display: none; }
+		.detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+		.detail-title { color: #ffd166; font-size: 15px; font-weight: 700; }
+		.detail-close { width: 28px; height: 28px; padding: 0; color: #dce7f2; background: transparent; border: 1px solid rgba(255,255,255,0.16); border-radius: 5px; cursor: pointer; }
+		.detail-close:hover { background: rgba(255,255,255,0.1); }
+		.detail-grid { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 6px 10px; font-size: 12px; line-height: 1.5; }
+		.detail-label { color: #8fa4b8; }
+		.detail-value { color: #eef3f8; overflow-wrap: anywhere; }
+		@media (max-width: 720px) {
+			.detail-panel { top: auto; bottom: 16px; }
+		}
 	</style>
 </head>
 <body>
 	<canvas id="viewer"></canvas>
 	<div class="panel">
-		<div class="title">Packing 3D Viewer</div>
+		<div id="masterTitle" class="title">Packing 3D Viewer</div>
 		<div id="status" class="meta">加载中...</div>
 		<div class="section-title">选择柜子</div>
 		<div id="containerList" class="container-list"></div>
 		<div id="selection" class="meta"></div>
 		<div id="legend"></div>
-		<div class="meta help">左键拖动：旋转视角<br>右键拖动：平移柜子<br>滚轮：缩放</div>
+		<div class="meta help">左键单击：查看货物详情<br>左键拖动：旋转视角<br>右键拖动：平移柜子<br>滚轮：缩放</div>
+	</div>
+	<div id="detailPanel" class="detail-panel" hidden>
+		<div class="detail-header">
+			<div class="detail-title">货物详情</div>
+			<button id="detailClose" class="detail-close" type="button" title="关闭">×</button>
+		</div>
+		<div id="detailBody" class="detail-grid"></div>
 	</div>
 	<script>
 		const canvas = document.getElementById("viewer");
 		const ctx = canvas.getContext("2d");
+		const masterTitleEl = document.getElementById("masterTitle");
 		const statusEl = document.getElementById("status");
 		const containerListEl = document.getElementById("containerList");
 		const selectionEl = document.getElementById("selection");
 		const legendEl = document.getElementById("legend");
-		const state = { yaw: -0.72, pitch: 0.54, zoom: 1, panX: 0, panY: 0, dragMode: null, lastX: 0, lastY: 0, selectedIndex: 0, data: null };
+		const detailPanelEl = document.getElementById("detailPanel");
+		const detailBodyEl = document.getElementById("detailBody");
+		const detailCloseEl = document.getElementById("detailClose");
+		const state = {
+			yaw: -0.72, pitch: 0.54, zoom: 1, panX: 0, panY: 0,
+			dragMode: null, lastX: 0, lastY: 0, downX: 0, downY: 0, moved: false,
+			selectedIndex: 0, selectedPlacement: null, renderedFaces: [], data: null
+		};
 
 		function resultIdFromPath() {
 			const match = window.location.pathname.match(/\/packing-viewer\/([^/?#]+)/);
@@ -114,7 +141,7 @@
 			return face.reduce((sum, point) => sum + point.z, 0) / face.length;
 		}
 
-		function drawFace(face, fill, stroke, alpha) {
+		function drawFace(face, fill, stroke, alpha, lineWidth = 0.8, strokeAlpha = 0.42) {
 			ctx.beginPath();
 			ctx.moveTo(face[0].x, face[0].y);
 			for (let i = 1; i < face.length; i++) ctx.lineTo(face[i].x, face[i].y);
@@ -122,9 +149,9 @@
 			ctx.globalAlpha = alpha;
 			ctx.fillStyle = fill;
 			ctx.fill();
-			ctx.globalAlpha = 0.42;
+			ctx.globalAlpha = strokeAlpha;
 			ctx.strokeStyle = stroke;
-			ctx.lineWidth = 0.8;
+			ctx.lineWidth = lineWidth;
 			ctx.stroke();
 			ctx.globalAlpha = 1;
 		}
@@ -146,6 +173,7 @@
 			ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
 			ctx.fillStyle = "#101418";
 			ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+			state.renderedFaces = [];
 			if (!state.data) return;
 
 			const container = (state.data.containers || [])[state.selectedIndex];
@@ -153,17 +181,101 @@
 			const bounds = boundsFor(container);
 			const faces = [];
 			for (const face of cuboidFaces(0, 0, 0, container.dx, container.dy, container.dz, bounds)) {
-				faces.push({ face, fill: "rgba(255,255,255,0.04)", stroke: "rgba(255,255,255,0.7)", alpha: 1 });
+				faces.push({ face, fill: "rgba(255,255,255,0.04)", stroke: "rgba(255,255,255,0.7)", alpha: 1, placement: null });
 			}
 			for (const placement of container.stack?.placements || []) {
 				const stackable = placement.stackable;
-				const house = placement.houseBsId || (stackable.name || "").split(" ")[0] || stackable.id || "cargo";
+				const house = placement.houseBsNo || placement.houseBsId || (stackable.name || "").split(" ")[0] || stackable.id || "cargo";
 				for (const face of cuboidFaces(placement.x, placement.y, placement.z, stackable.dx, stackable.dy, stackable.dz, bounds)) {
-					faces.push({ face, fill: colorFor(house), stroke: "rgba(0,0,0,0.72)", alpha: 0.68 });
+					faces.push({ face, fill: colorFor(house), stroke: "rgba(0,0,0,0.72)", alpha: 0.68, placement });
 				}
 			}
 			faces.sort((a, b) => faceDepth(a.face) - faceDepth(b.face));
-			for (const item of faces) drawFace(item.face, item.fill, item.stroke, item.alpha);
+			for (const item of faces) {
+				const selected = item.placement && item.placement === state.selectedPlacement;
+				drawFace(item.face, selected ? "#ffd166" : item.fill, selected ? "#fff4c2" : item.stroke,
+					selected ? 0.88 : item.alpha, selected ? 2.4 : 0.8, selected ? 1 : 0.42);
+			}
+			state.renderedFaces = faces;
+		}
+
+		function pointInFace(x, y, face) {
+			let inside = false;
+			for (let i = 0, j = face.length - 1; i < face.length; j = i++) {
+				const a = face[i], b = face[j];
+				const crosses = ((a.y > y) !== (b.y > y))
+					&& (x < (b.x - a.x) * (y - a.y) / ((b.y - a.y) || Number.EPSILON) + a.x);
+				if (crosses) inside = !inside;
+			}
+			return inside;
+		}
+
+		function formatCm(value) {
+			return Number.isFinite(Number(value)) ? `${Number((Number(value) / 10).toFixed(1))} cm` : "-";
+		}
+
+		function addDetailRow(label, value) {
+			const labelEl = document.createElement("div");
+			labelEl.className = "detail-label";
+			labelEl.textContent = label;
+			const valueEl = document.createElement("div");
+			valueEl.className = "detail-value";
+			valueEl.textContent = value ?? "-";
+			detailBodyEl.append(labelEl, valueEl);
+		}
+
+		function ruleText(placement) {
+			const rules = [];
+			if (placement.heightPosition === 1) rules.push("置底");
+			if (placement.heightPosition === 2) rules.push("置顶");
+			if (placement.noPress) rules.push("勿压");
+			if (placement.doorSide) rules.push("靠门");
+			return rules.length ? rules.join("、") : "无";
+		}
+
+		function showPlacementDetails(placement) {
+			state.selectedPlacement = placement;
+			detailBodyEl.replaceChildren();
+			if (!placement) {
+				detailPanelEl.hidden = true;
+				draw();
+				return;
+			}
+			const container = (state.data?.containers || [])[state.selectedIndex];
+			const stackable = placement.stackable || {};
+			const original = [placement.originalDx, placement.originalDy, placement.originalDz];
+			const placed = [stackable.dx, stackable.dy, stackable.dz];
+			const rotated = original.every(Number.isFinite) && placed.every(Number.isFinite)
+				? original.some((value, index) => value !== placed[index]) : false;
+			addDetailRow("分单号", placement.houseBsNo || placement.houseBsId || "-");
+			addDetailRow("进仓号", placement.inboundNo || placement.inboundId || "-");
+			addDetailRow("品名", placement.description || "-");
+			addDetailRow("客户", placement.customer || "-");
+			addDetailRow("件序号", `第 ${placement.pieceIndex || 1} 件`);
+			addDetailRow("所属柜", container?.id || container?.name || "-");
+			addDetailRow("原始尺寸", `${formatCm(placement.originalDx)} × ${formatCm(placement.originalDy)} × ${formatCm(placement.originalDz)}`);
+			addDetailRow("摆放尺寸", `${formatCm(stackable.dx)} × ${formatCm(stackable.dy)} × ${formatCm(stackable.dz)}`);
+			addDetailRow("摆放坐标", `X ${formatCm(placement.x)} / Y ${formatCm(placement.y)} / Z ${formatCm(placement.z)}`);
+			addDetailRow("单件重量", Number.isFinite(placement.unitWeightKg) ? `${Number(placement.unitWeightKg.toFixed(3))} kg` : "-");
+			addDetailRow("单件体积", Number.isFinite(placement.unitVolumeM3) ? `${Number(placement.unitVolumeM3.toFixed(6))} m³` : "-");
+			addDetailRow("方向", rotated ? "已旋转" : "原始方向");
+			addDetailRow("装箱规则", ruleText(placement));
+			detailPanelEl.hidden = false;
+			draw();
+		}
+
+		function selectPlacementAt(clientX, clientY) {
+			const rect = canvas.getBoundingClientRect();
+			const x = clientX - rect.left;
+			const y = clientY - rect.top;
+			for (let i = state.renderedFaces.length - 1; i >= 0; i--) {
+				const item = state.renderedFaces[i];
+				if (item.placement && pointInFace(x, y, item.face)) {
+					showPlacementDetails(item.placement);
+					return;
+				}
+			}
+			showPlacementDetails(null);
 		}
 
 		function selectContainer(index) {
@@ -171,6 +283,8 @@
 			state.panX = 0;
 			state.panY = 0;
 			state.zoom = 1;
+			state.selectedPlacement = null;
+			detailPanelEl.hidden = true;
 			const containers = state.data?.containers || [];
 			const container = containers[index];
 			containerListEl.querySelectorAll("button").forEach((button, buttonIndex) => {
@@ -180,7 +294,7 @@
 			const placements = container.stack?.placements || [];
 			selectionEl.textContent = `当前：${container.id || container.name || `柜 ${index + 1}`} | ${placements.length} 件`;
 			const houses = new Set(placements.map(placement =>
-				placement.houseBsId || (placement.stackable?.name || "").split(" ")[0]).filter(Boolean));
+				placement.houseBsNo || placement.houseBsId || (placement.stackable?.name || "").split(" ")[0]).filter(Boolean));
 			legendEl.innerHTML = Array.from(houses).sort().map(house => `<span class="badge" style="border-left:10px solid ${colorFor(house)}">${house}</span>`).join("");
 			draw();
 		}
@@ -208,6 +322,8 @@
 			state.data = await response.json();
 			const containers = state.data.containers || [];
 			const placements = containers.reduce((sum, container) => sum + (container.stack?.placements?.length || 0), 0);
+			const masterNo = state.data.masterNo || state.data.masterBsId || "未提供主单号";
+			masterTitleEl.textContent = `主单：${masterNo}`;
 			statusEl.textContent = `${resultId} | ${containers.length} 柜 | ${placements} 件`;
 			renderContainerList(containers);
 			selectContainer(0);
@@ -218,16 +334,23 @@
 			state.dragMode = event.button === 2 ? "pan" : "rotate";
 			state.lastX = event.clientX;
 			state.lastY = event.clientY;
+			state.downX = event.clientX;
+			state.downY = event.clientY;
+			state.moved = false;
 			canvas.classList.add("dragging");
 			event.preventDefault();
 		});
 		canvas.addEventListener("contextmenu", event => event.preventDefault());
-		window.addEventListener("mouseup", () => {
+		window.addEventListener("mouseup", event => {
+			const mode = state.dragMode;
+			const moved = state.moved;
 			state.dragMode = null;
 			canvas.classList.remove("dragging");
+			if (mode === "rotate" && !moved) selectPlacementAt(event.clientX, event.clientY);
 		});
 		window.addEventListener("mousemove", event => {
 			if (!state.dragMode) return;
+			if (Math.hypot(event.clientX - state.downX, event.clientY - state.downY) > 5) state.moved = true;
 			const deltaX = event.clientX - state.lastX;
 			const deltaY = event.clientY - state.lastY;
 			if (state.dragMode === "rotate") {
@@ -246,6 +369,7 @@
 			state.zoom = Math.max(0.2, Math.min(5, state.zoom * (event.deltaY > 0 ? 0.9 : 1.1)));
 			draw();
 		}, { passive: false });
+		detailCloseEl.addEventListener("click", () => showPlacementDetails(null));
 		window.addEventListener("resize", resize);
 
 		resize();
