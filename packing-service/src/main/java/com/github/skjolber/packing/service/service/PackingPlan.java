@@ -6,7 +6,7 @@ import com.github.skjolber.packing.api.BoxItem;
 import com.github.skjolber.packing.api.ContainerItem;
 import com.github.skjolber.packing.service.dto.ContainerDto;
 
-record PackingPlan(
+public record PackingPlan(
 		List<ContainerDto> requestedContainers,
 		List<ContainerItem> containerItems,
 		List<BoxItem> boxItems,

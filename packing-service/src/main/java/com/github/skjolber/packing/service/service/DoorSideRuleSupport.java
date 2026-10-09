@@ -1,5 +1,7 @@
 package com.github.skjolber.packing.service.service;
 
+import com.github.skjolber.packing.service.service.mapping.PackingMapper;
+
 import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;

@@ -1,4 +1,4 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.logging;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

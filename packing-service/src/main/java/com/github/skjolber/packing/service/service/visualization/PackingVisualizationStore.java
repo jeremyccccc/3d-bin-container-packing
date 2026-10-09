@@ -1,4 +1,4 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.visualization;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -25,6 +25,7 @@ import com.github.skjolber.packing.api.PackagerResult;
 import com.github.skjolber.packing.api.Placement;
 import com.github.skjolber.packing.service.dto.PackingRequest;
 import com.github.skjolber.packing.service.dto.PackingResponse;
+import com.github.skjolber.packing.service.service.mapping.PackingMapper;
 
 @Service
 public class PackingVisualizationStore {
@@ -42,7 +43,7 @@ public class PackingVisualizationStore {
 		this(objectMapper, Path.of(resultsDirectory), true);
 	}
 
-	PackingVisualizationStore(ObjectMapper objectMapper, Path resultsDirectory) {
+	public PackingVisualizationStore(ObjectMapper objectMapper, Path resultsDirectory) {
 		this(objectMapper, resultsDirectory, true);
 	}
 
@@ -52,17 +53,17 @@ public class PackingVisualizationStore {
 		this.enabled = enabled;
 	}
 
-	static PackingVisualizationStore disabled() {
+	public static PackingVisualizationStore disabled() {
 		return new PackingVisualizationStore(new ObjectMapper(), Path.of("packing-results"), false);
 	}
 
-	String newResultId() {
+	public String newResultId() {
 		String timestamp = ID_TIMESTAMP.format(OffsetDateTime.now());
 		String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
 		return "pack_" + timestamp + "_" + suffix;
 	}
 
-	void save(String resultId, PackingRequest request, PackingResponse response, PackagerResult result) throws IOException {
+	public void save(String resultId, PackingRequest request, PackingResponse response, PackagerResult result) throws IOException {
 		if (!enabled) {
 			return;
 		}

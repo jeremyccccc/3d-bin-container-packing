@@ -1,4 +1,6 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.mapping;
+
+import com.github.skjolber.packing.service.service.PackingPlan;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

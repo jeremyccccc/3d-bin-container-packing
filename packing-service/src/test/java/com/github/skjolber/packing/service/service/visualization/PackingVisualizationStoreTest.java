@@ -1,5 +1,8 @@
 package com.github.skjolber.packing.service.service;
 
+import com.github.skjolber.packing.service.service.mapping.PackingMapper;
+import com.github.skjolber.packing.service.service.visualization.PackingVisualizationStore;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Files;

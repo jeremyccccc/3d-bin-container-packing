@@ -1,4 +1,4 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.mapping;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,19 +17,23 @@ import com.github.skjolber.packing.service.dto.HouseBillItemDto;
 import com.github.skjolber.packing.service.dto.PackingRequest;
 import com.github.skjolber.packing.service.dto.PackingRuleDto;
 import com.github.skjolber.packing.service.dto.SizeDto;
+import com.github.skjolber.packing.service.service.CargoLine;
+import com.github.skjolber.packing.service.service.PackingPlan;
 
 @Component
-class PackingMapper {
+public class PackingMapper {
+	public PackingMapper() {
+	}
 
-	static final String PROP_CARGO_ID = "cargoId";
-	static final String PROP_HOUSE_BS_ID = "houseBsId";
-	static final String PROP_HOUSE_BS_NO = "houseBsNo";
-	static final String PROP_INBOUND_ID = "inboundId";
-	static final String PROP_INBOUND_NO = "inboundNo";
-	static final String PROP_CUSTOMER = "customer";
-	static final String PROP_HEIGHT_POSITION = "heightPosition";
-	static final String PROP_NO_PRESS = "noPress";
-	static final String PROP_DOOR_SIDE = "doorSide";
+	public static final String PROP_CARGO_ID = "cargoId";
+	public static final String PROP_HOUSE_BS_ID = "houseBsId";
+	public static final String PROP_HOUSE_BS_NO = "houseBsNo";
+	public static final String PROP_INBOUND_ID = "inboundId";
+	public static final String PROP_INBOUND_NO = "inboundNo";
+	public static final String PROP_CUSTOMER = "customer";
+	public static final String PROP_HEIGHT_POSITION = "heightPosition";
+	public static final String PROP_NO_PRESS = "noPress";
+	public static final String PROP_DOOR_SIDE = "doorSide";
 
 	private static final int DIMENSION_SCALE = 10;
 	private static final int WEIGHT_SCALE = 1000;
@@ -40,7 +44,7 @@ class PackingMapper {
 			"40HQ", new ContainerSpec(1203.2, 235.2, 269.8, 26600),
 			"45HQ", new ContainerSpec(1356.0, 235.2, 269.8, 27600));
 
-	PackingPlan toPlan(PackingRequest request) {
+	public PackingPlan toPlan(PackingRequest request) {
 		List<String> warnings = new ArrayList<>();
 		List<ContainerItem> containers = toContainerItems(request.containerLists(), warnings);
 		List<CargoLine> cargoLines = toCargoLines(request.houseBillList(), warnings);
@@ -67,7 +71,7 @@ class PackingMapper {
 		return items;
 	}
 
-	static ContainerItem toContainerItem(ContainerDto container) {
+	public static ContainerItem toContainerItem(ContainerDto container) {
 		ContainerSpec spec = spec(container);
 		if (spec == null) return null;
 		Container mapped = Container

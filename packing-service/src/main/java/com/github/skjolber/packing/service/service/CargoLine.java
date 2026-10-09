@@ -2,7 +2,7 @@ package com.github.skjolber.packing.service.service;
 
 import com.github.skjolber.packing.service.dto.HouseBillItemDto;
 
-record CargoLine(
+public record CargoLine(
 		String cargoId,
 		String houseBsId,
 		String houseBsNo,

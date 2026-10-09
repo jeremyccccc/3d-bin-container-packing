@@ -1,5 +1,7 @@
 package com.github.skjolber.packing.service.service;
 
+import com.github.skjolber.packing.service.service.mapping.PackingMapper;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;

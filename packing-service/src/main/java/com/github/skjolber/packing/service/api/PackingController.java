@@ -14,9 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.github.skjolber.packing.service.dto.PackingRequest;
 import com.github.skjolber.packing.service.dto.PackingResponse;
-import com.github.skjolber.packing.service.service.PackingRequestLogStore;
 import com.github.skjolber.packing.service.service.PackingService;
-import com.github.skjolber.packing.service.service.PackingVisualizationStore;
+import com.github.skjolber.packing.service.service.logging.PackingRequestLogStore;
+import com.github.skjolber.packing.service.service.visualization.PackingVisualizationStore;
 
 @RestController
 @RequestMapping("/api/packing")

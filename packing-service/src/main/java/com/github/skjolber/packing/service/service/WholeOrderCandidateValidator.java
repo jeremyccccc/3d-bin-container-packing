@@ -1,5 +1,7 @@
 package com.github.skjolber.packing.service.service;
 
+import com.github.skjolber.packing.service.service.mapping.PackingMapper;
+
 import static com.github.skjolber.packing.service.service.PackingDiagnostics.elapsedMillis;
 import static com.github.skjolber.packing.service.service.PackingDiagnostics.houseBillCount;
 import static com.github.skjolber.packing.service.service.PackingDiagnostics.houseBillIds;
