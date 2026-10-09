@@ -98,6 +98,11 @@ apm_modules/
 **/test-runs/
 *.log
 
+# Local packing benchmark runs. Curated baselines already tracked by Git remain tracked.
+/packing-service/benchmark-results/*.json
+/packing-service/benchmark-results/*.zip
+/packing-service/benchmark-results/deterministic-*.md
+
 # Locally generated packing screenshots
 /viewer-containers-3d.png
 /visualizer/viewer/MASTER-*.png
