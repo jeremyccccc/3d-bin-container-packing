@@ -1,52 +1,30 @@
 package com.github.skjolber.packing.service.service.engine;
 
-import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.elapsedMillis;
-import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.houseBillCount;
-import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.safe;
-import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.unitCount;
-
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import com.github.skjolber.packing.api.ContainerItem;
 import com.github.skjolber.packing.api.Container;
+import com.github.skjolber.packing.api.ContainerItem;
 import com.github.skjolber.packing.api.PackagerResult;
 import com.github.skjolber.packing.service.service.PackingPlan;
-import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
 import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentStrategy;
-import com.github.skjolber.packing.service.service.assignment.WholeOrderCandidateSearch;
-import com.github.skjolber.packing.service.service.assignment.WholeOrderPackingCache;
 import com.github.skjolber.packing.service.service.blockbeam.BlockBeamPackingStrategy;
 import com.github.skjolber.packing.service.service.compaction.AutomaticContainerFallback;
-import com.github.skjolber.packing.service.service.compaction.TailContainerCompactor;
 import com.github.skjolber.packing.service.service.logging.PackingLogContext;
 import com.github.skjolber.packing.service.service.rule.DoorSideRuleSupport;
 import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 @Component
 public class PackingEngine {
-	private static final long WHOLE_ORDER_SEARCH_MILLIS = 180_000L;
 	private static final int DEFAULT_CANDIDATE_PROBE_WINDOW = 8;
 	private static final int DEFAULT_CANDIDATE_PROBE_STATES = 8;
-	private static final AtomicLong SEARCH_SEQUENCE = new AtomicLong();
 
-	private final WholeOrderAssignmentSolver assignmentSolver = new WholeOrderAssignmentSolver();
-	private final WholeOrderCandidateSearch candidateSearch;
-	private final WholeOrderCandidateValidator candidateValidator;
+	private final WholeOrderPackingCoordinator wholeOrderCoordinator;
 	private final BlockBeamPackingStrategy blockBeamStrategy;
 	private final LegacyContainerPackingStrategy legacyStrategy;
-	private final PlacementSupport.Policy supportPolicy;
 	private final PackingEngineSettings settings;
 
 	public PackingEngine() {
@@ -123,11 +101,8 @@ public class PackingEngine {
 	}
 
 	private PackingEngine(PlacementSupport.Policy supportPolicy, PackingEngineSettings settings) {
-		this.supportPolicy = supportPolicy;
 		this.settings = settings;
-		this.candidateSearch = new WholeOrderCandidateSearch(supportPolicy,
-				settings.candidateProbeEnabled(), settings.candidateProbeWindow(), settings.candidateProbeStates());
-		this.candidateValidator = new WholeOrderCandidateValidator(settings.diagnosticsEnabled());
+		this.wholeOrderCoordinator = new WholeOrderPackingCoordinator(supportPolicy, settings);
 		this.blockBeamStrategy = new BlockBeamPackingStrategy(supportPolicy);
 		this.legacyStrategy = new LegacyContainerPackingStrategy(supportPolicy, settings.diagnosticsEnabled());
 	}
@@ -149,7 +124,8 @@ public class PackingEngine {
 		// orientations and first complete solution. This avoids the four-profile
 		// quality search, gap filling and LNS used by the standalone flat-search
 		// mode.
-		PackagerResult targetResult = packWholeOrders(plan, false, targetContainerCount);
+		PackagerResult targetResult = wholeOrderCoordinator.pack(
+				plan, false, targetContainerCount, this::packFlat);
 		if (targetResult != null && targetResult.isSuccess()) {
 			return new PackingOutcome(plan, targetResult, true, false, targetContainerCount);
 		}
@@ -159,7 +135,8 @@ public class PackingEngine {
 				+ targetContainerCount + " fallbackContainers=" + (targetContainerCount + 1)
 				+ " addedContainerId="
 				+ fallbackPlan.requestedContainers().get(fallbackPlan.requestedContainers().size() - 1).id());
-		PackagerResult fallbackResult = packWholeOrders(fallbackPlan, true, targetContainerCount);
+		PackagerResult fallbackResult = wholeOrderCoordinator.pack(
+				fallbackPlan, true, targetContainerCount, this::packFlat);
 		boolean achieved = fallbackResult != null && fallbackResult.isSuccess()
 				&& fallbackResult.size() <= targetContainerCount;
 		System.out.println("packing-service automatic-fallback success=" + achieved
@@ -167,133 +144,6 @@ public class PackingEngine {
 				+ " finalContainers=" + (fallbackResult == null ? 0 : fallbackResult.size())
 				+ " targetContainers=" + targetContainerCount);
 		return new PackingOutcome(fallbackPlan, fallbackResult, achieved, true, targetContainerCount);
-	}
-
-	private PackagerResult packWholeOrders(PackingPlan plan, boolean compactTail, int compactionTargetCount) {
-		long searchStarted = System.nanoTime();
-		long deadline = System.currentTimeMillis() + WHOLE_ORDER_SEARCH_MILLIS;
-		long searchId = SEARCH_SEQUENCE.incrementAndGet();
-		List<ContainerItem> physicalContainers = expandContainerItems(plan.containerItems());
-		long candidateGenerationStarted = System.nanoTime();
-		List<WholeOrderAssignmentSolver.Candidate> candidates = assignmentSolver.candidates(
-				plan, settings.assignmentStrategy(), settings.assignmentTargetFillRatio());
-		long candidateGenerationMillis = elapsedMillis(candidateGenerationStarted);
-		WholeOrderPackingCache cache = new WholeOrderPackingCache();
-		System.out.println("packing-service whole-order search-start searchId=" + searchId
-				+ " candidates=" + candidates.size() + " candidateGenerationMs=" + candidateGenerationMillis
-				+ " containers=" + physicalContainers.size() + " houseBills=" + houseBillCount(plan.boxItems())
-				+ " itemTypes=" + plan.boxItems().size() + " units=" + unitCount(plan.boxItems())
-				+ " deadlineMs=" + WHOLE_ORDER_SEARCH_MILLIS
-				+ " assignmentStrategy=" + settings.assignmentStrategy().propertyValue()
-				+ " targetFillRatio=" + settings.assignmentTargetFillRatio()
-				+ " parallelism=" + settings.wholeOrderParallelism());
-		PackagerResult best = null;
-		int attempted = 0;
-		int successful = 0;
-		int workerCount = Math.min(settings.wholeOrderParallelism(), Math.max(1, candidates.size()));
-		if (workerCount == 1) {
-			WholeOrderCandidateSearch.Result searchResult = candidateSearch.search(
-					candidates, physicalContainers, cache, searchId, deadline,
-					(candidate, attempt) -> {
-						WholeOrderCandidateValidator.Result validation = candidateValidator.validate(
-								plan, physicalContainers, candidate, attempt, searchId, deadline,
-								cache, this::packFlat);
-						return validation.success() ? validation.result() : null;
-					});
-			best = searchResult.result();
-			attempted = searchResult.attempted();
-			successful = best == null ? 0 : 1;
-		} else {
-			AtomicLong workerSequence = new AtomicLong();
-			ExecutorService executor = Executors.newFixedThreadPool(workerCount, runnable -> {
-				Thread thread = new Thread(runnable,
-						"packing-candidate-" + searchId + '-' + workerSequence.incrementAndGet());
-				thread.setDaemon(true);
-				return thread;
-			});
-			try {
-				search:
-				for (int batchStart = 0; batchStart < candidates.size()
-						&& System.currentTimeMillis() < deadline; batchStart += workerCount) {
-					List<Future<WholeOrderCandidateValidator.Result>> futures = new ArrayList<>();
-					int batchEnd = Math.min(candidates.size(), batchStart + workerCount);
-					for (int candidateIndex = batchStart; candidateIndex < batchEnd; candidateIndex++) {
-						WholeOrderAssignmentSolver.Candidate candidate = candidates.get(candidateIndex);
-						int attempt = candidateIndex + 1;
-						futures.add(executor.submit(() -> candidateValidator.validate(
-								plan, physicalContainers, candidate, attempt, searchId, deadline,
-								cache, this::packFlat)));
-						attempted++;
-					}
-					for (int futureIndex = 0; futureIndex < futures.size(); futureIndex++) {
-						long remainingMillis = deadline - System.currentTimeMillis();
-						if (remainingMillis <= 0L) break search;
-						try {
-							WholeOrderCandidateValidator.Result validation = futures.get(futureIndex).get(
-									remainingMillis, TimeUnit.MILLISECONDS);
-							if (!validation.success()) continue;
-							successful++;
-							best = validation.result();
-							for (int cancel = futureIndex + 1; cancel < futures.size(); cancel++) {
-								futures.get(cancel).cancel(true);
-							}
-							break search;
-						} catch (InterruptedException e) {
-							Thread.currentThread().interrupt();
-							break search;
-						} catch (TimeoutException e) {
-							break search;
-						} catch (ExecutionException e) {
-							System.err.println("packing-service whole-order candidate-error searchId="
-									+ searchId + " attempt=" + (batchStart + futureIndex + 1)
-									+ " reason=" + e.getCause());
-						}
-					}
-				}
-			} finally {
-				executor.shutdownNow();
-			}
-		}
-		WholeOrderPackingCache.Stats cacheStats = cache.stats();
-		System.out.println("packing-service whole-order candidates=" + candidates.size()
-				+ " searchId=" + searchId + " attempted=" + attempted + " successful=" + successful
-				+ " success=" + (best != null) + " candidateGenerationMs=" + candidateGenerationMillis
-				+ " elapsedMs=" + elapsedMillis(searchStarted)
-				+ " cacheHits=" + cacheStats.hits() + " cacheMisses=" + cacheStats.misses()
-				+ " cacheSuccessHits=" + cacheStats.successHits()
-				+ " cacheFailureHits=" + cacheStats.failureHits() + " cacheSize=" + cacheStats.size()
-				+ " cacheSavedMs=" + cacheStats.savedMillis()
-				+ " termination=" + terminationReason(candidates.size(), attempted, successful, deadline));
-		if (AutomaticContainerFallback.shouldCompact(
-				compactTail, settings.tailCompactionEnabled(), best, compactionTargetCount)) {
-			long compactionDeadline = System.currentTimeMillis() + settings.tailCompactionSearchMillis();
-			PackagerResult baseline = best;
-			try {
-				best = new TailContainerCompactor(supportPolicy,
-						settings.tailCompactionBeamWidth(), settings.tailCompactionBranching())
-						.compact(best, compactionDeadline);
-			} catch (RuntimeException e) {
-				System.err.println("packing-service tail-compaction failed unexpectedly; keeping baseline: "
-						+ e.getMessage());
-				e.printStackTrace(System.err);
-				best = baseline;
-			}
-		}
-		return best;
-	}
-
-	private static List<ContainerItem> expandContainerItems(List<ContainerItem> items) {
-		List<ContainerItem> result = new ArrayList<>();
-		for (ContainerItem item : items) {
-			for (int i = 0; i < item.getCount(); i++) {
-				result.add(new ContainerItem(item.getContainer(), 1));
-			}
-		}
-		return result;
-	}
-
-	private PackagerResult packFlat(PackingPlan plan, long deadline) {
-		return packFlat(plan, deadline, PackingLogContext.NONE);
 	}
 
 	private PackagerResult packFlat(PackingPlan plan, long deadline, PackingLogContext context) {
@@ -308,8 +158,8 @@ public class PackingEngine {
 
 	private PackagerResult packOrientation(PackingPlan plan, boolean swapLengthWidth, long deadline,
 			PackingLogContext context) {
-		List<ContainerItem> containers = swapLengthWidth ? swappedContainers(plan.containerItems()) : plan.containerItems();
-		PackagerResult best = null;
+		List<ContainerItem> containers = swapLengthWidth
+				? swappedContainers(plan.containerItems()) : plan.containerItems();
 		PackagerResult blockBeam = blockBeamStrategy.pack(plan, containers,
 				"BlockBeam" + (swapLengthWidth ? "-SWAPPED" : ""), deadline, context);
 		if (blockBeam != null && blockBeam.isSuccess()) {
@@ -336,19 +186,12 @@ public class PackingEngine {
 	}
 
 	private static PackagerResult better(PackagerResult current, PackagerResult candidate) {
-		if (candidate == null) {
-			return current;
-		}
-		if (current == null || candidate.size() < current.size()) {
-			return candidate;
-		}
+		if (candidate == null) return current;
+		if (current == null || candidate.size() < current.size()) return candidate;
 		if (candidate.size() == current.size()
-				&& totalContainerCapacity(candidate) < totalContainerCapacity(current)) {
-			return candidate;
-		}
-		if (candidate.size() == current.size() && totalLoadVolume(candidate) > totalLoadVolume(current)) {
-			return candidate;
-		}
+				&& totalContainerCapacity(candidate) < totalContainerCapacity(current)) return candidate;
+		if (candidate.size() == current.size()
+				&& totalLoadVolume(candidate) > totalLoadVolume(current)) return candidate;
 		if (candidate.size() == current.size() && totalLoadVolume(candidate) == totalLoadVolume(current)
 				&& DoorSideRuleSupport.score(candidate).isBetterThan(DoorSideRuleSupport.score(current))) {
 			return candidate;
@@ -358,9 +201,7 @@ public class PackingEngine {
 
 	private static int totalContainerCount(List<ContainerItem> containerItems) {
 		int count = 0;
-		for (ContainerItem item : containerItems) {
-			count += item.getCount();
-		}
+		for (ContainerItem item : containerItems) count += item.getCount();
 		return count;
 	}
 
@@ -371,12 +212,4 @@ public class PackingEngine {
 	private static long totalContainerCapacity(PackagerResult result) {
 		return result.getContainers().stream().mapToLong(Container::getMaxLoadVolume).sum();
 	}
-
-	private static String terminationReason(int candidates, int attempted, int successful, long deadline) {
-		if (System.currentTimeMillis() >= deadline) return "deadline";
-		if (successful > 0 && attempted < candidates) return "first-success";
-		if (attempted >= candidates) return "candidates-exhausted";
-		return "stopped";
-	}
-
 }

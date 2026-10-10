@@ -1,16 +1,8 @@
 package com.github.skjolber.packing.service.service.blockbeam;
 
-import com.github.skjolber.packing.service.service.rule.PlacementGeometry;
-import com.github.skjolber.packing.service.service.rule.PlacementSupport;
-
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 import com.github.skjolber.packing.api.Box;
 import com.github.skjolber.packing.api.BoxItem;
@@ -18,18 +10,17 @@ import com.github.skjolber.packing.api.BoxStackValue;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.PackagerResult;
 import com.github.skjolber.packing.api.Placement;
+import com.github.skjolber.packing.service.service.rule.PlacementGeometry;
+import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 /**
- * Bounded search over homogeneous blocks and a maximal-space cover whose bases
- * are fully supported.
- * It is intentionally independent of the core packagers so it can be evaluated
- * as an additional candidate without changing their established behaviour.
+ * Entry point for bounded search over homogeneous blocks and a supported
+ * maximal-space cover. Mutable search state lives in {@link BlockBeamSearchSession}.
  */
 public final class BlockBeamSearchPackager {
 
 	private static final int DEFAULT_BEAM_WIDTH = 64;
 	private static final int DEFAULT_BRANCHING = 48;
-	private static final int MAX_ELITE_STATES = 12;
 
 	private final SearchProfile searchProfile;
 	private final BlockBeamMoveGenerator moveGenerator;
@@ -62,13 +53,14 @@ public final class BlockBeamSearchPackager {
 		return pack(sourceContainer, items, deadlineMillis, "");
 	}
 
-	public PackagerResult pack(Container sourceContainer, List<BoxItem> items, long deadlineMillis, String logContext) {
+	public PackagerResult pack(Container sourceContainer, List<BoxItem> items,
+			long deadlineMillis, String logContext) {
 		SearchSession session = newSession(sourceContainer, items, logContext);
 		return session == null ? null : session.advance(deadlineMillis).result();
 	}
 
-	public SearchProgress probe(Container sourceContainer, List<BoxItem> items, int maximumExpandedStates,
-			String logContext) {
+	public SearchProgress probe(Container sourceContainer, List<BoxItem> items,
+			int maximumExpandedStates, String logContext) {
 		if (maximumExpandedStates <= 0) {
 			throw new IllegalArgumentException("maximumExpandedStates must be positive");
 		}
@@ -76,8 +68,8 @@ public final class BlockBeamSearchPackager {
 		return session == null ? SearchProgress.empty(items) : session.advanceStates(maximumExpandedStates);
 	}
 
-	public PackagerResult pack(Container sourceContainer, List<BoxItem> items, List<Placement> fixedPlacements,
-			long deadlineMillis, String logContext) {
+	public PackagerResult pack(Container sourceContainer, List<BoxItem> items,
+			List<Placement> fixedPlacements, long deadlineMillis, String logContext) {
 		SearchSession session = newSession(sourceContainer, items, fixedPlacements, logContext);
 		return session == null ? null : session.advance(deadlineMillis).result();
 	}
@@ -94,173 +86,31 @@ public final class BlockBeamSearchPackager {
 		validateFixedPlacements(container, fixed);
 		List<Block> catalog = BlockBeamBlockCatalog.generate(container, items);
 		if (catalog.isEmpty()) return null;
-		return new SearchSession(container, List.copyOf(items), catalog, fixed, logContext);
-	}
-
-	private PackagerResult result(Container container, State state, List<Placement> fixedPlacements, long elapsedMillis,
-			int expandedStates, int generatedStates, String logContext) {
-		List<Placement> placements = new ArrayList<>();
-		for (BlockPlacement placement : state.placements()) placement.expandInto(placements);
-		container.getStack().addAll(fixedPlacements);
-		container.getStack().addAll(placements);
-		System.out.println("packing-service BLOCK-BEAM" + logContext + " success=true elapsedMs=" + elapsedMillis
-				+ " expanded=" + expandedStates + " generated=" + generatedStates
-				+ " blocks=" + state.placements().size() + " placements=" + placements.size());
-		return new PackagerResult(List.of(container), elapsedMillis, false);
+		return new SearchSession(new BlockBeamSearchSession(container, List.copyOf(items), catalog, fixed,
+				logContext, searchProfile, moveGenerator, selector));
 	}
 
 	final class SearchSession {
-		private final Container container;
-		private final List<BoxItem> items;
-		private final List<Block> catalog;
-		private final List<Placement> fixedPlacements;
-		private final BlockBeamFixedPlacementIndex fixedPlacementIndex;
-		private final String logContext;
-		private final Set<String> visited = new HashSet<>();
-		private List<State> beam;
-		private int expandedStates;
-		private int generatedStates;
-		private int maximumPackedUnits;
-		private long maximumPackedVolume;
-		private final Map<String, State> eliteStates = new LinkedHashMap<>();
-		private final int totalUnits;
-		private final long fixedVolume;
-		private final long totalVolume;
-		private long activeMillis;
-		private boolean exhausted;
-		private PackagerResult completed;
+		private final BlockBeamSearchSession delegate;
 
-		private SearchSession(Container container, List<BoxItem> items, List<Block> catalog,
-				List<Placement> fixedPlacements, String logContext) {
-			this.container = container;
-			this.items = items;
-			this.catalog = catalog;
-			this.fixedPlacements = fixedPlacements;
-			this.fixedPlacementIndex = new BlockBeamFixedPlacementIndex(fixedPlacements);
-			this.logContext = logContext;
-			int[] remaining = items.stream().mapToInt(BoxItem::getCount).toArray();
-			this.totalUnits = Arrays.stream(remaining).sum();
-			this.fixedVolume = fixedPlacements.stream().mapToLong(p -> p.getStackValue().getVolume()).sum();
-			this.totalVolume = items.stream()
-					.mapToLong(item -> item.getBox().getVolume() * (long) item.getCount()).sum();
-			List<Space> spaces = BlockBeamSpaceManager.initialSpaces(container, fixedPlacements);
-			if (spaces.isEmpty()) {
-				this.beam = List.of();
-				this.exhausted = true;
-				return;
-			}
-			int fixedWeight = fixedWeight(fixedPlacements);
-			State initial = new State(remaining, spaces, List.of(), fixedVolume, fixedWeight, 0, 0,
-					feasibility(remaining, spaces, items));
-			this.beam = List.of(initial);
-			this.visited.add(initial.key());
+		private SearchSession(BlockBeamSearchSession delegate) {
+			this.delegate = delegate;
 		}
 
 		SearchProgress advance(long deadlineMillis) {
-			return advance(deadlineMillis, Integer.MAX_VALUE);
+			return delegate.advance(deadlineMillis);
 		}
 
 		SearchProgress advanceStates(int maximumAdditionalStates) {
-			if (maximumAdditionalStates <= 0) return progress();
-			return advance(0L, maximumAdditionalStates);
-		}
-
-		private SearchProgress advance(long deadlineMillis, int maximumAdditionalStates) {
-			if (completed != null || exhausted) return progress();
-			long callStarted = System.nanoTime();
-			int expandedAtStart = expandedStates;
-			search:
-			while (!beam.isEmpty() && !expired(deadlineMillis)
-					&& expandedStates - expandedAtStart < maximumAdditionalStates) {
-				List<State> next = new ArrayList<>();
-				for (State state : beam) {
-					if (expandedStates - expandedAtStart >= maximumAdditionalStates) break search;
-					if (state.complete()) return complete(state, callStarted);
-					expandedStates++;
-					for (Move move : moveGenerator.moves(
-							state, catalog, container, fixedPlacements, fixedPlacementIndex)) {
-						State child = apply(state, move, container, items);
-						generatedStates++;
-						trackElite(child);
-						if (child.feasibility().strandedTypes() == 0 && visited.add(child.key())) next.add(child);
-					}
-				}
-				if (next.isEmpty()) {
-					exhausted = true;
-					beam = List.of();
-					break;
-				}
-				next = selectBeam(next, container);
-				for (State state : next) {
-					if (state.complete()) return complete(state, callStarted);
-				}
-				beam = next;
-			}
-			activeMillis += elapsedMillis(callStarted);
-			System.out.println("packing-service BLOCK-BEAM" + logContext
-					+ " profile=" + searchProfile.propertyValue()
-					+ " success=false status=" + (exhausted ? "exhausted" : "paused")
-					+ " elapsedMs=" + activeMillis + " expanded=" + expandedStates
-					+ " generated=" + generatedStates + " blockTypes=" + catalog.size()
-					+ " packedUnits=" + maximumPackedUnits + "/" + totalUnits
-					+ " packedVolume=" + maximumPackedVolume + "/" + totalVolume
-					+ " elites=" + eliteStates.size());
-			return progress();
-		}
-
-		private SearchProgress complete(State state, long callStarted) {
-			activeMillis += elapsedMillis(callStarted);
-			maximumPackedUnits = totalUnits;
-			maximumPackedVolume = totalVolume;
-			completed = result(container, state, fixedPlacements, activeMillis, expandedStates, generatedStates, logContext);
-			return progress();
+			return delegate.advanceStates(maximumAdditionalStates);
 		}
 
 		SearchProgress progress() {
-			return new SearchProgress(completed, exhausted, maximumPackedUnits, totalUnits,
-					maximumPackedVolume, totalVolume, eliteStates.size(),
-					expandedStates, generatedStates, activeMillis);
+			return delegate.progress();
 		}
 
 		PartialSolution bestPartial() {
-			State best = eliteStates.values().stream()
-					.max(BlockBeamStateEvaluator.partialComparator(fixedVolume)).orElse(null);
-			if (best == null) return null;
-			Container partial = container.clone();
-			partial.getStack().addAll(fixedPlacements);
-			List<Placement> placements = new ArrayList<>();
-			for (BlockPlacement placement : best.placements()) placement.expandInto(placements);
-			partial.getStack().addAll(placements);
-			List<BoxItem> remaining = new ArrayList<>();
-			for (int index = 0; index < best.remaining().length; index++) {
-				int count = best.remaining()[index];
-				if (count > 0) remaining.add(new BoxItem(items.get(index).getBox(), count));
-			}
-			return new PartialSolution(partial, List.copyOf(remaining),
-					best.packedVolume(), fixedVolume + totalVolume,
-					packedUnits(best), totalUnits);
-		}
-
-		private void trackElite(State state) {
-			int units = packedUnits(state);
-			long volume = state.packedVolume() - fixedVolume;
-			maximumPackedUnits = Math.max(maximumPackedUnits, units);
-			maximumPackedVolume = Math.max(maximumPackedVolume, volume);
-			String shape = BlockBeamStateEvaluator.eliteShape(state, container);
-			State previous = eliteStates.get(shape);
-			if (previous == null || BlockBeamStateEvaluator.betterPartial(
-					state, previous, fixedVolume)) eliteStates.put(shape, state);
-			if (eliteStates.size() > MAX_ELITE_STATES) {
-				String worst = eliteStates.entrySet().stream()
-						.min(Map.Entry.comparingByValue(
-								BlockBeamStateEvaluator.partialComparator(fixedVolume)))
-						.map(Map.Entry::getKey).orElse(null);
-				if (worst != null) eliteStates.remove(worst);
-			}
-		}
-
-		private int packedUnits(State state) {
-			return totalUnits - Arrays.stream(state.remaining()).sum();
+			return delegate.bestPartial();
 		}
 	}
 
@@ -301,43 +151,12 @@ public final class BlockBeamSearchPackager {
 		}
 	}
 
-	private static int fixedWeight(List<Placement> placements) {
-		long weight = 0L;
-		for (Placement placement : placements) weight += placement.getBox().getWeight();
-		return (int) Math.min(Integer.MAX_VALUE, weight);
-	}
-
-	private State apply(State state, Move move, Container container, List<BoxItem> items) {
-		Space used = state.spaces().get(move.spaceIndex());
-		Block block = move.block();
-		int[] remaining = state.remaining().clone();
-		remaining[block.itemIndex()] -= block.units();
-
-		List<BlockPlacement> placements = new ArrayList<>(state.placements());
-		placements.add(new BlockPlacement(block, used.x(), used.y(), used.z()));
-		List<Space> spaces = BlockBeamSpaceManager.updateSpaces(
-				state.spaces(), used.x(), used.y(), used.z(), block, container);
-		return new State(remaining, spaces, placements,
-				state.packedVolume() + block.volume(), state.weight() + block.weight(),
-				Math.max(state.maxX(), used.x() + block.dx()),
-				Math.max(state.maxZ(), used.z() + block.dz()), feasibility(remaining, spaces, items));
-	}
-
 	List<State> selectBeam(List<State> candidates, Container container) {
 		return selector.select(candidates, container);
 	}
 
 	static Feasibility feasibility(int[] remaining, List<Space> spaces, List<BoxItem> items) {
 		return BlockBeamStateEvaluator.feasibility(remaining, spaces, items);
-	}
-
-	private static boolean expired(long deadlineMillis) {
-		return Thread.currentThread().isInterrupted()
-				|| deadlineMillis > 0L && System.currentTimeMillis() >= deadlineMillis;
-	}
-
-	private static long elapsedMillis(long startedNanos) {
-		return (System.nanoTime() - startedNanos) / 1_000_000L;
 	}
 
 	record Block(int itemIndex, Box box, BoxStackValue orientation,
@@ -451,6 +270,5 @@ public final class BlockBeamSearchPackager {
 		String key() {
 			return x + "," + y + "," + z + "," + dx + "," + dy + "," + dz;
 		}
-
 	}
 }
