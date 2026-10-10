@@ -4,19 +4,14 @@ import com.github.skjolber.packing.service.service.blockbeam.BlockBeamSearchPack
 import com.github.skjolber.packing.service.service.rule.PlacementGeometry;
 import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
-import com.github.skjolber.packing.service.service.mapping.PackingMapper;
-
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
-import com.github.skjolber.packing.api.Box;
 import com.github.skjolber.packing.api.BoxItem;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.PackagerResult;
-import com.github.skjolber.packing.api.Placement;
+import com.github.skjolber.packing.service.service.compaction.TailCompactionSupport.HouseBillLoad;
 
 /** Moves complete house bills out of the least-filled container without moving existing front-container cargo. */
 public final class TailContainerCompactor {
@@ -24,11 +19,13 @@ public final class TailContainerCompactor {
 	private final PlacementSupport.Policy supportPolicy;
 	private final int blockBeamWidth;
 	private final int blockBranching;
+	private final TailCompactionValidator validator;
 
 	public TailContainerCompactor(PlacementSupport.Policy supportPolicy, int blockBeamWidth, int blockBranching) {
 		this.supportPolicy = supportPolicy;
 		this.blockBeamWidth = blockBeamWidth;
 		this.blockBranching = blockBranching;
+		this.validator = new TailCompactionValidator(supportPolicy);
 	}
 
 	public PackagerResult compact(PackagerResult source, long deadlineMillis) {
@@ -43,10 +40,10 @@ public final class TailContainerCompactor {
 		}
 		long started = System.nanoTime();
 		List<Container> containers = new ArrayList<>(source.getContainers());
-		int tailIndex = leastFilledContainer(containers);
+		int tailIndex = TailCompactionSupport.leastFilledContainer(containers);
 		Container originalTail = containers.get(tailIndex);
-		long originalTailVolume = loadedVolume(originalTail);
-		List<HouseBillLoad> houseBills = new ArrayList<>(houseBills(originalTail));
+		long originalTailVolume = TailCompactionSupport.loadedVolume(originalTail);
+		List<HouseBillLoad> houseBills = new ArrayList<>(TailCompactionSupport.houseBills(originalTail));
 		houseBills.sort(Comparator.comparingLong(HouseBillLoad::volume).reversed()
 				.thenComparing(HouseBillLoad::houseBsId));
 
@@ -62,8 +59,8 @@ public final class TailContainerCompactor {
 		long movedVolume = 0L;
 		for (HouseBillLoad houseBill : houseBills) {
 			if (expired(deadlineMillis)) break;
-			if (!canPack(houseBill.items())) continue;
-			List<Integer> targets = targetOrder(containers, tailIndex);
+			if (!TailCompactionSupport.canPack(houseBill.items())) continue;
+			List<Integer> targets = TailCompactionSupport.targetOrder(containers, tailIndex);
 			PackagerResult selected = null;
 			int selectedTargetIndex = -1;
 			boolean selectedBySpaceGuidedRepair = false;
@@ -83,7 +80,7 @@ public final class TailContainerCompactor {
 					logRejectedAttempt("direct", houseBill.houseBsId(), target, e);
 					continue;
 				}
-				if (!validGeometry(packed, "direct", houseBill.houseBsId(), target)) continue;
+				if (!validator.validGeometry(packed, "direct", houseBill.houseBsId(), target)) continue;
 				selected = packed;
 				selectedTargetIndex = targetIndex;
 				directSuccesses++;
@@ -104,7 +101,7 @@ public final class TailContainerCompactor {
 						logRejectedAttempt("space-guided", houseBill.houseBsId(), target, e);
 						continue;
 					}
-					if (!validGeometry(repaired, "space-guided", houseBill.houseBsId(), target)) continue;
+					if (!validator.validGeometry(repaired, "space-guided", houseBill.houseBsId(), target)) continue;
 					selected = repaired;
 					selectedTargetIndex = targetIndex;
 					selectedBySpaceGuidedRepair = true;
@@ -117,7 +114,7 @@ public final class TailContainerCompactor {
 				Container nextTail = prepareTailAfterRemoval(
 						containers.get(tailIndex), houseBill.houseBsId(), deadlineMillis);
 				Container nextTarget = selected.get(0);
-				if (nextTail == null || !supported(nextTarget)) continue;
+				if (nextTail == null || !validator.supported(nextTarget)) continue;
 
 				containers.set(selectedTargetIndex, nextTarget);
 				containers.set(tailIndex, nextTail);
@@ -144,7 +141,7 @@ public final class TailContainerCompactor {
 			return source;
 		}
 		if (containers.get(tailIndex).getStack().getPlacements().isEmpty()) containers.remove(tailIndex);
-		if (!validFinalResult(source.getContainers(), containers)) {
+		if (!validator.validFinalResult(source.getContainers(), containers)) {
 			System.out.println("packing-service tail-compaction success=false reason=final-validation"
 					+ " movedBills=" + movedBills + " movedVolume=" + movedVolume
 					+ " directMovedBills=" + directMovedBills + " directMovedVolume=" + directMovedVolume
@@ -172,17 +169,6 @@ public final class TailContainerCompactor {
 				+ " targetedMovedVolume=" + targetedMovedVolume + " elapsedMs=" + elapsedMillis);
 	}
 
-	private static boolean validGeometry(PackagerResult result, String phase, String houseBsId,
-			Container target) {
-		if (result == null || !result.isSuccess() || result.size() != 1) return false;
-		PlacementGeometry.Validation geometry = PlacementGeometry.validate(result.get(0));
-		if (geometry.valid()) return true;
-		System.err.println("packing-service tail-compaction rejected phase=" + phase
-				+ " houseBsId=" + houseBsId + " target=" + target.getId()
-				+ " reason=" + geometry.message());
-		return false;
-	}
-
 	private static void logRejectedAttempt(String phase, String houseBsId, Container target,
 			IllegalArgumentException exception) {
 		System.err.println("packing-service tail-compaction rejected phase=" + phase
@@ -190,143 +176,17 @@ public final class TailContainerCompactor {
 				+ " reason=" + exception.getMessage());
 	}
 
-	private boolean supported(Container container) {
-		List<Placement> placements = container.getStack().getPlacements();
-		for (Placement placement : placements) {
-			if (!PlacementSupport.validate(placement, placements, supportPolicy).valid()) return false;
-		}
-		return true;
-	}
-
 	private Container prepareTailAfterRemoval(Container source, String houseBsId, long deadlineMillis) {
-		Container remaining = withoutHouseBill(source, houseBsId);
-		if (remaining.getStack().getPlacements().isEmpty() || supported(remaining)) return remaining;
-		if (!canRepack(remaining.getStack().getPlacements()) || expired(deadlineMillis)) return null;
-		List<BoxItem> items = boxItems(remaining.getStack().getPlacements());
+		Container remaining = TailCompactionSupport.withoutHouseBill(source, houseBsId);
+		if (remaining.getStack().getPlacements().isEmpty() || validator.supported(remaining)) return remaining;
+		if (!TailCompactionSupport.canRepack(remaining.getStack().getPlacements()) || expired(deadlineMillis)) return null;
+		List<BoxItem> items = TailCompactionSupport.boxItems(remaining.getStack().getPlacements());
 		BlockBeamSearchPackager packager = new BlockBeamSearchPackager(
 				blockBeamWidth, blockBranching, supportPolicy);
 		PackagerResult repacked = packager.pack(remaining, items, deadlineMillis,
 				" phase=tail-repack removedHouseBsId=" + houseBsId);
-		if (repacked == null || !repacked.isSuccess() || !supported(repacked.get(0))) return null;
+		if (repacked == null || !repacked.isSuccess() || !validator.supported(repacked.get(0))) return null;
 		return repacked.get(0);
-	}
-
-	private static boolean canRepack(List<Placement> placements) {
-		for (Placement placement : placements) {
-			if (!hasSimpleRules(placement.getBox())) return false;
-		}
-		return true;
-	}
-
-	private static boolean canPack(List<BoxItem> items) {
-		for (BoxItem item : items) if (!hasSimpleRules(item.getBox())) return false;
-		return true;
-	}
-
-	private static boolean hasSimpleRules(Box box) {
-		Object noPress = box.getProperty(PackingMapper.PROP_NO_PRESS);
-		Object doorSide = box.getProperty(PackingMapper.PROP_DOOR_SIDE);
-		Object heightPosition = box.getProperty(PackingMapper.PROP_HEIGHT_POSITION);
-		return !Boolean.TRUE.equals(noPress) && !Boolean.TRUE.equals(doorSide)
-				&& (!(heightPosition instanceof Number number) || number.intValue() == 0);
-	}
-
-	private boolean validFinalResult(List<Container> source, List<Container> compacted) {
-		if (!boxCounts(source).equals(boxCounts(compacted))) return false;
-		Map<String, Integer> houseBillContainers = new LinkedHashMap<>();
-		for (int containerIndex = 0; containerIndex < compacted.size(); containerIndex++) {
-			Container container = compacted.get(containerIndex);
-			List<Placement> placements = container.getStack().getPlacements();
-			for (int i = 0; i < placements.size(); i++) {
-				Placement placement = placements.get(i);
-				if (placement.getAbsoluteX() < 0 || placement.getAbsoluteY() < 0 || placement.getAbsoluteZ() < 0
-						|| placement.getAbsoluteEndX() >= container.getLoadDx()
-						|| placement.getAbsoluteEndY() >= container.getLoadDy()
-						|| placement.getAbsoluteEndZ() >= container.getLoadDz()) return false;
-				for (int j = 0; j < i; j++) if (intersects(placement, placements.get(j))) return false;
-				if (!PlacementSupport.validate(placement, placements, supportPolicy).valid()) return false;
-				String houseBsId = String.valueOf((Object) placement.getBox()
-						.getProperty(PackingMapper.PROP_HOUSE_BS_ID));
-				Integer previous = houseBillContainers.putIfAbsent(houseBsId, containerIndex);
-				if (previous != null && previous != containerIndex) return false;
-			}
-		}
-		return true;
-	}
-
-	private static Map<String, Integer> boxCounts(List<Container> containers) {
-		Map<String, Integer> counts = new LinkedHashMap<>();
-		for (Container container : containers) {
-			for (Placement placement : container.getStack().getPlacements()) {
-				counts.merge(placement.getBox().getId(), 1, Integer::sum);
-			}
-		}
-		return counts;
-	}
-
-	private static boolean intersects(Placement a, Placement b) {
-		return a.getAbsoluteX() <= b.getAbsoluteEndX() && b.getAbsoluteX() <= a.getAbsoluteEndX()
-				&& a.getAbsoluteY() <= b.getAbsoluteEndY() && b.getAbsoluteY() <= a.getAbsoluteEndY()
-				&& a.getAbsoluteZ() <= b.getAbsoluteEndZ() && b.getAbsoluteZ() <= a.getAbsoluteEndZ();
-	}
-
-	private static int leastFilledContainer(List<Container> containers) {
-		int index = 0;
-		double fill = Double.MAX_VALUE;
-		for (int i = 0; i < containers.size(); i++) {
-			Container container = containers.get(i);
-			double candidate = loadedVolume(container) / (double) container.getMaxLoadVolume();
-			if (candidate < fill) {
-				fill = candidate;
-				index = i;
-			}
-		}
-		return index;
-	}
-
-	private static List<Integer> targetOrder(List<Container> containers, int tailIndex) {
-		List<Integer> indexes = new ArrayList<>();
-		for (int i = 0; i < containers.size(); i++) if (i != tailIndex) indexes.add(i);
-		indexes.sort(Comparator.<Integer>comparingDouble(index ->
-				loadedVolume(containers.get(index)) / (double) containers.get(index).getMaxLoadVolume()).reversed()
-				.thenComparingInt(Integer::intValue));
-		return indexes;
-	}
-
-	private static List<HouseBillLoad> houseBills(Container tail) {
-		Map<String, BillBuilder> bills = new LinkedHashMap<>();
-		for (Placement placement : tail.getStack().getPlacements()) {
-			Object property = placement.getBox().getProperty(PackingMapper.PROP_HOUSE_BS_ID);
-			String houseBsId = String.valueOf(property);
-			bills.computeIfAbsent(houseBsId, BillBuilder::new).add(placement);
-		}
-		return bills.values().stream().map(BillBuilder::build).toList();
-	}
-
-	private static List<BoxItem> boxItems(List<Placement> placements) {
-		Map<String, BoxCount> boxes = new LinkedHashMap<>();
-		for (Placement placement : placements) {
-			Box box = placement.getBox();
-			boxes.computeIfAbsent(box.getId(), ignored -> new BoxCount(box)).count++;
-		}
-		return boxes.values().stream().map(value -> new BoxItem(value.box, value.count)).toList();
-	}
-
-	private static Container withoutHouseBill(Container source, String houseBsId) {
-		Container copy = source.clone();
-		for (Placement placement : source.getStack().getPlacements()) {
-			Object property = placement.getBox().getProperty(PackingMapper.PROP_HOUSE_BS_ID);
-			if (!houseBsId.equals(String.valueOf(property))) copy.getStack().add(placement);
-		}
-		return copy;
-	}
-
-	private static long loadedVolume(Container container) {
-		long volume = 0L;
-		for (Placement placement : container.getStack().getPlacements()) {
-			volume += placement.getStackValue().getVolume();
-		}
-		return volume;
 	}
 
 	private static boolean expired(long deadlineMillis) {
@@ -338,39 +198,4 @@ public final class TailContainerCompactor {
 		return deadlineMillis <= 0L ? candidate : Math.min(deadlineMillis, candidate);
 	}
 
-	private record HouseBillLoad(String houseBsId, List<BoxItem> items, int units, long volume) {
-	}
-
-	private static final class BillBuilder {
-		private final String houseBsId;
-		private final Map<String, BoxCount> boxes = new LinkedHashMap<>();
-		private int units;
-		private long volume;
-
-		private BillBuilder(String houseBsId) {
-			this.houseBsId = houseBsId;
-		}
-
-		private void add(Placement placement) {
-			Box box = placement.getBox();
-			boxes.computeIfAbsent(box.getId(), ignored -> new BoxCount(box)).count++;
-			units++;
-			volume += placement.getStackValue().getVolume();
-		}
-
-		private HouseBillLoad build() {
-			List<BoxItem> items = boxes.values().stream()
-					.map(value -> new BoxItem(value.box, value.count)).toList();
-			return new HouseBillLoad(houseBsId, items, units, volume);
-		}
-	}
-
-	private static final class BoxCount {
-		private final Box box;
-		private int count;
-
-		private BoxCount(Box box) {
-			this.box = box;
-		}
-	}
 }
