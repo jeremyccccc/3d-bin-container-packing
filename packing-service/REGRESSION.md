@@ -24,10 +24,14 @@ This verifies that ascending, descending, and fixed shuffled house-bill input or
 ## 3. Build and start the executable service
 
 ```powershell
-mvn -pl packing-service -am package -DskipTests
+mvn -Ppacking-service-local -pl packing-service -am clean package -DskipTests
 $env:SERVER_PORT = '18084'
 java -jar packing-service\target\packing-service-4.2.2-SNAPSHOT.jar
 ```
+
+The local profile skips release-only source/Javadoc attachments and Moditect's
+in-place module rewrite. `clean` keeps the executable build reproducible across
+consecutive runs. Use the `release` profile when publishing library artifacts.
 
 Use the default production algorithm settings unless the test explicitly targets a configuration change:
 

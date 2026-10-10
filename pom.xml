@@ -523,14 +523,6 @@
 				<artifactId>jacoco-maven-plugin</artifactId>
 			</plugin>
 			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-source-plugin</artifactId>
-			</plugin>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-javadoc-plugin</artifactId>
-			</plugin>
-			<plugin>
 				<groupId>org.moditect</groupId>
 				<artifactId>moditect-maven-plugin</artifactId>
 			</plugin>			
@@ -567,6 +559,14 @@
 				<plugins>
 					<plugin>
 						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-source-plugin</artifactId>
+					</plugin>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-javadoc-plugin</artifactId>
+					</plugin>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-release-plugin</artifactId>
 					</plugin>
 					<plugin>
@@ -575,6 +575,15 @@
 					</plugin>
 				</plugins>
 			</build>
+		</profile>
+		<profile>
+			<!-- Local executable packing-service build; release-only artifacts are not required. -->
+			<id>packing-service-local</id>
+			<properties>
+				<maven.javadoc.skip>true</maven.javadoc.skip>
+				<maven.source.skip>true</maven.source.skip>
+				<moditect.skip>true</moditect.skip>
+			</properties>
 		</profile>
 	</profiles>
 
