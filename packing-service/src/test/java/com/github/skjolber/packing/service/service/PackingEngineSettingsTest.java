@@ -1,5 +1,7 @@
 package com.github.skjolber.packing.service.service;
 
+import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentStrategy;
+
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;

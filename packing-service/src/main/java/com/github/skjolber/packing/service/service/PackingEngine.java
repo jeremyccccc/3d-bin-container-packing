@@ -22,6 +22,13 @@ import org.springframework.stereotype.Component;
 import com.github.skjolber.packing.api.ContainerItem;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.PackagerResult;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentStrategy;
+import com.github.skjolber.packing.service.service.blockbeam.BlockBeamPackingStrategy;
+import com.github.skjolber.packing.service.service.compaction.AutomaticContainerFallback;
+import com.github.skjolber.packing.service.service.compaction.TailContainerCompactor;
+import com.github.skjolber.packing.service.service.rule.DoorSideRuleSupport;
+import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 @Component
 class PackingEngine {

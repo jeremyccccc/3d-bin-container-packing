@@ -1,5 +1,7 @@
 package com.github.skjolber.packing.service.service;
 
+import com.github.skjolber.packing.service.service.compaction.AutomaticContainerFallback;
+
 import com.github.skjolber.packing.service.service.mapping.PackingMapper;
 import com.github.skjolber.packing.service.service.visualization.PackingVisualizationStore;
 

@@ -1,6 +1,10 @@
 package com.github.skjolber.packing.service.service;
 
 import com.github.skjolber.packing.service.service.mapping.PackingMapper;
+import com.github.skjolber.packing.service.service.assignment.PackingDeterminism;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentStrategy;
+import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

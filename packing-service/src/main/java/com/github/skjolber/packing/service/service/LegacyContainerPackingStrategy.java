@@ -18,6 +18,15 @@ import com.github.skjolber.packing.packer.laff.FastLargestAreaFitFirstPackager;
 import com.github.skjolber.packing.packer.laff.LargestAreaFitFirstPackager;
 import com.github.skjolber.packing.packer.plain.PlainPackager;
 import com.github.skjolber.packing.packer.plain.PlainPlacementComparator;
+import com.github.skjolber.packing.service.service.rule.BottomPlacementControlsBuilder;
+import com.github.skjolber.packing.service.service.rule.BottomRuleSupport;
+import com.github.skjolber.packing.service.service.rule.DoorSideRuleSupport;
+import com.github.skjolber.packing.service.service.rule.LayoutPlacementComparator;
+import com.github.skjolber.packing.service.service.rule.NoPressRuleSupport;
+import com.github.skjolber.packing.service.service.rule.PackingBusinessRules;
+import com.github.skjolber.packing.service.service.rule.PlacementSupport;
+import com.github.skjolber.packing.service.service.rule.RuleBoxItemComparator;
+import com.github.skjolber.packing.service.service.logging.PackingSearchDiagnostics;
 
 /** Compatibility pipeline used when Block Beam-only mode is disabled. */
 final class LegacyContainerPackingStrategy {

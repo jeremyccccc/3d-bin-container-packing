@@ -2,6 +2,8 @@ package com.github.skjolber.packing.service.service;
 
 import java.util.Objects;
 
+import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentStrategy;
+
 record PackingEngineSettings(
 		boolean diagnosticsEnabled,
 		boolean blockBeamOnly,

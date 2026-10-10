@@ -7,6 +7,8 @@ import java.util.List;
 import com.github.skjolber.packing.api.BoxItem;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.ContainerItem;
+import com.github.skjolber.packing.service.service.blockbeam.BlockBeamSearchPackager;
+import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 /**
  * Deterministic racing inside a bounded window of whole-order candidates.

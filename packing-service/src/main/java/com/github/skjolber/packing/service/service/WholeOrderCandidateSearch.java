@@ -7,6 +7,8 @@ import java.util.List;
 
 import com.github.skjolber.packing.api.ContainerItem;
 import com.github.skjolber.packing.api.PackagerResult;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
+import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 /**
  * Controls the order in which whole-order assignment candidates are validated.

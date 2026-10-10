@@ -1,5 +1,8 @@
 package com.github.skjolber.packing.service.service;
 
+import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderCandidateScorer;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
