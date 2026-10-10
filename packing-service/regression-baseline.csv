@@ -1,0 +1,7 @@
+baseline_date,baseline_commit,combination,input_order,target_containers,success,final_containers,target_candidates,target_ms,fallback_candidates,fallback_ms,direct_attempts,direct_moved_bills,direct_moved_m3,space_guided_attempts,space_guided_moved_bills,compaction_ms,total_ms,result
+2026-10-10,997e55d8,M1,ascending,1,false,2,1,6855,1,1630,6,5,15.194934,1,0,4012,12896,"目标1柜失败，保留2柜Viewer"
+2026-10-10,997e55d8,M1+M2,ascending,2,true,2,3,32505,0,0,0,0,0.000000,0,0,0,32556,"2柜成功"
+2026-10-10,997e55d8,M2+M3+M4,ascending,3,true,3,1,13655,0,0,0,0,0.000000,0,0,0,13712,"3柜成功"
+2026-10-10,997e55d8,M3+M4+M5,ascending,3,true,3,3,73987,0,0,0,0,0.000000,0,0,0,74037,"3柜成功"
+2026-10-10,997e55d8,M2+M3+M4,descending,3,true,3,1,13254,0,0,0,0,0.000000,0,0,0,13358,"3柜成功"
+2026-10-10,997e55d8,M2+M3+M4,shuffled,3,true,3,1,13447,0,0,0,0,0.000000,0,0,0,13497,"3柜成功"

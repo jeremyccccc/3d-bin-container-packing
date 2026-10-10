@@ -8,7 +8,7 @@ Run these checks before and after changes to packing, assignment, support, or co
 mvn -pl packing-service -am clean test
 ```
 
-Expected result: reactor build succeeds. The optional real-data determinism test is skipped unless a data file is supplied.
+Expected result: reactor build succeeds. The optional real-data determinism test is skipped unless a data file is supplied. At baseline `997e55d8`, packing-service has 109 tests: 108 pass and the optional real-data test is skipped.
 
 ## 2. Real-data candidate determinism
 
@@ -29,9 +29,7 @@ $env:SERVER_PORT = '18084'
 java -jar packing-service\target\packing-service-4.2.2-SNAPSHOT.jar
 ```
 
-The local profile skips release-only source/Javadoc attachments and Moditect's
-in-place module rewrite. `clean` keeps the executable build reproducible across
-consecutive runs. Use the `release` profile when publishing library artifacts.
+The local profile skips release-only source/Javadoc attachments and Moditect's in-place module rewrite. `clean` keeps the executable build reproducible across consecutive runs. Use the `release` profile when publishing library artifacts.
 
 Use the default production algorithm settings unless the test explicitly targets a configuration change:
 
@@ -80,3 +78,18 @@ foreach ($order in 'ascending', 'descending', 'shuffled') {
 ```
 
 Expected result: all three runs succeed on candidate 1 with three containers. Wall-clock time may vary by machine load.
+
+## 6. Reference measurements
+
+Environment: baseline commit `997e55d8`, default production settings, executable JAR, single candidate-validation thread. Timings are reference values rather than strict assertions because machine load affects wall-clock duration.
+
+| Combination | Order | Target | Result | Final containers | Target candidates | Target search | Fallback search | Tail compaction | Total |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| M1 | ascending | 1 | target failed, Viewer retained | 2 | 1 | 6.855 s | 1.630 s / 1 candidate | 4.012 s | 12.896 s |
+| M1+M2 | ascending | 2 | success | 2 | 3 | 32.505 s | — | — | 32.556 s |
+| M2+M3+M4 | ascending | 3 | success | 3 | 1 | 13.655 s | — | — | 13.712 s |
+| M3+M4+M5 | ascending | 3 | success | 3 | 3 | 73.987 s | — | — | 74.037 s |
+| M2+M3+M4 | descending | 3 | success | 3 | 1 | 13.254 s | — | — | 13.358 s |
+| M2+M3+M4 | shuffled | 3 | success | 3 | 1 | 13.447 s | — | — | 13.497 s |
+
+The machine-readable form of this table is `regression-baseline.csv`.
