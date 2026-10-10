@@ -1,6 +1,6 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.engine;
 
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.safe;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.safe;
 
 import java.util.Comparator;
 import java.util.List;
@@ -18,6 +18,8 @@ import com.github.skjolber.packing.packer.laff.FastLargestAreaFitFirstPackager;
 import com.github.skjolber.packing.packer.laff.LargestAreaFitFirstPackager;
 import com.github.skjolber.packing.packer.plain.PlainPackager;
 import com.github.skjolber.packing.packer.plain.PlainPlacementComparator;
+import com.github.skjolber.packing.service.service.PackingPlan;
+import com.github.skjolber.packing.service.service.logging.PackingLogContext;
 import com.github.skjolber.packing.service.service.rule.BottomPlacementControlsBuilder;
 import com.github.skjolber.packing.service.service.rule.BottomRuleSupport;
 import com.github.skjolber.packing.service.service.rule.DoorSideRuleSupport;

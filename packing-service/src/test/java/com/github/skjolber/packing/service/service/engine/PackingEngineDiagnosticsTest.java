@@ -1,8 +1,9 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.engine;
 
 import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 import com.github.skjolber.packing.service.service.mapping.PackingMapper;
+import com.github.skjolber.packing.service.service.PackingService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

@@ -1,17 +1,20 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.engine;
 
 import com.github.skjolber.packing.service.service.mapping.PackingMapper;
+import com.github.skjolber.packing.service.service.PackingPlan;
 import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderPackingCache;
+import com.github.skjolber.packing.service.service.logging.PackingLogContext;
 
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.elapsedMillis;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.houseBillCount;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.houseBillIds;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.percent;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.rounded;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.safe;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.totalVolume;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.totalWeight;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.unitCount;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.elapsedMillis;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.houseBillCount;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.houseBillIds;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.percent;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.rounded;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.safe;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.totalVolume;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.totalWeight;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.unitCount;
 
 import java.util.ArrayList;
 import java.util.HashMap;

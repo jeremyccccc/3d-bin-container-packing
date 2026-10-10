@@ -1,6 +1,8 @@
 package com.github.skjolber.packing.service.service;
 
 import com.github.skjolber.packing.service.service.compaction.AutomaticContainerFallback;
+import com.github.skjolber.packing.service.service.engine.PackingEngine;
+import com.github.skjolber.packing.service.service.engine.PackingOutcome;
 
 import com.github.skjolber.packing.service.service.mapping.PackingMapper;
 import com.github.skjolber.packing.service.service.visualization.PackingVisualizationStore;
@@ -136,7 +138,7 @@ class AutomaticContainerFallbackTest {
 		}
 
 		@Override
-		PackingOutcome packOutcome(PackingPlan plan) {
+		public PackingOutcome packOutcome(PackingPlan plan) {
 			return outcome;
 		}
 	}

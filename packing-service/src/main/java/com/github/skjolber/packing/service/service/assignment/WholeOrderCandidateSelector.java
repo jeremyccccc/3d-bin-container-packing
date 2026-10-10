@@ -1,4 +1,4 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.assignment;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -7,7 +7,6 @@ import java.util.List;
 import com.github.skjolber.packing.api.BoxItem;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.ContainerItem;
-import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
 
 /**
  * Re-ranks untested whole-order assignments from exact request-local packing

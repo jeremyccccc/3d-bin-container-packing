@@ -1,9 +1,9 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.engine;
 
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.elapsedMillis;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.houseBillCount;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.safe;
-import static com.github.skjolber.packing.service.service.PackingDiagnostics.unitCount;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.elapsedMillis;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.houseBillCount;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.safe;
+import static com.github.skjolber.packing.service.service.logging.PackingDiagnostics.unitCount;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,16 +22,20 @@ import org.springframework.stereotype.Component;
 import com.github.skjolber.packing.api.ContainerItem;
 import com.github.skjolber.packing.api.Container;
 import com.github.skjolber.packing.api.PackagerResult;
+import com.github.skjolber.packing.service.service.PackingPlan;
 import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
 import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentStrategy;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderCandidateSearch;
+import com.github.skjolber.packing.service.service.assignment.WholeOrderPackingCache;
 import com.github.skjolber.packing.service.service.blockbeam.BlockBeamPackingStrategy;
 import com.github.skjolber.packing.service.service.compaction.AutomaticContainerFallback;
 import com.github.skjolber.packing.service.service.compaction.TailContainerCompactor;
+import com.github.skjolber.packing.service.service.logging.PackingLogContext;
 import com.github.skjolber.packing.service.service.rule.DoorSideRuleSupport;
 import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 @Component
-class PackingEngine {
+public class PackingEngine {
 	private static final long WHOLE_ORDER_SEARCH_MILLIS = 180_000L;
 	private static final int DEFAULT_CANDIDATE_PROBE_WINDOW = 8;
 	private static final int DEFAULT_CANDIDATE_PROBE_STATES = 8;
@@ -45,13 +49,13 @@ class PackingEngine {
 	private final PlacementSupport.Policy supportPolicy;
 	private final PackingEngineSettings settings;
 
-	PackingEngine() {
+	public PackingEngine() {
 		this(PlacementSupport.DEFAULT_POLICY, false, false,
 				WholeOrderAssignmentStrategy.BALANCED, 0.85, false, 30_000L, 32, 32, 1);
 	}
 
 	@Autowired
-	PackingEngine(
+	public PackingEngine(
 			@Value("${packing.support.minimum-area-ratio:0.85}") double minimumAreaRatio,
 			@Value("${packing.support.require-center:true}") boolean requireCenterSupport,
 			@Value("${packing.support.maximum-overhang-mm:20}") int maximumOverhangMillimeters,
@@ -76,28 +80,28 @@ class PackingEngine {
 				candidateProbeEnabled, candidateProbeWindow, candidateProbeStates);
 	}
 
-	PackingEngine(PlacementSupport.Policy supportPolicy) {
+	public PackingEngine(PlacementSupport.Policy supportPolicy) {
 		this(supportPolicy, false, false, WholeOrderAssignmentStrategy.BALANCED, 0.85,
 				false, 30_000L, 32, 32, 1);
 	}
 
-	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled) {
+	public PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled) {
 		this(supportPolicy, diagnosticsEnabled, false, WholeOrderAssignmentStrategy.BALANCED, 0.85,
 				false, 30_000L, 32, 32, 1);
 	}
 
-	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly) {
+	public PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly) {
 		this(supportPolicy, diagnosticsEnabled, blockBeamOnly,
 				WholeOrderAssignmentStrategy.BALANCED, 0.85, false, 30_000L, 32, 32, 1);
 	}
 
-	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
+	public PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
 			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio) {
 		this(supportPolicy, diagnosticsEnabled, blockBeamOnly, assignmentStrategy, assignmentTargetFillRatio,
 				false, 30_000L, 32, 32, 1);
 	}
 
-	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
+	public PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
 			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio,
 			boolean tailCompactionEnabled, long tailCompactionSearchMillis,
 			int tailCompactionBeamWidth, int tailCompactionBranching, int wholeOrderParallelism) {
@@ -107,7 +111,7 @@ class PackingEngine {
 				DEFAULT_CANDIDATE_PROBE_WINDOW, DEFAULT_CANDIDATE_PROBE_STATES);
 	}
 
-	PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
+	public PackingEngine(PlacementSupport.Policy supportPolicy, boolean diagnosticsEnabled, boolean blockBeamOnly,
 			WholeOrderAssignmentStrategy assignmentStrategy, double assignmentTargetFillRatio,
 			boolean tailCompactionEnabled, long tailCompactionSearchMillis,
 			int tailCompactionBeamWidth, int tailCompactionBranching, int wholeOrderParallelism,
@@ -128,12 +132,12 @@ class PackingEngine {
 		this.legacyStrategy = new LegacyContainerPackingStrategy(supportPolicy, settings.diagnosticsEnabled());
 	}
 
-	PackagerResult pack(PackingPlan plan) {
+	public PackagerResult pack(PackingPlan plan) {
 		PackingOutcome outcome = packOutcome(plan);
 		return outcome.targetAchieved() ? outcome.result() : null;
 	}
 
-	PackingOutcome packOutcome(PackingPlan plan) {
+	public PackingOutcome packOutcome(PackingPlan plan) {
 		if (plan.containerItems().isEmpty() || plan.boxItems().isEmpty()) {
 			return new PackingOutcome(plan, null, false, false,
 					totalContainerCount(plan.containerItems()));

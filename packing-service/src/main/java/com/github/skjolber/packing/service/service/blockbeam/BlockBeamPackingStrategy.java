@@ -10,8 +10,8 @@ import com.github.skjolber.packing.api.PackagerResult;
 import com.github.skjolber.packing.service.service.rule.BottomRuleSupport;
 import com.github.skjolber.packing.service.service.rule.DoorSideRuleSupport;
 import com.github.skjolber.packing.service.service.rule.NoPressRuleSupport;
-import com.github.skjolber.packing.service.service.PackingLogContext;
 import com.github.skjolber.packing.service.service.PackingPlan;
+import com.github.skjolber.packing.service.service.logging.PackingLogContext;
 import com.github.skjolber.packing.service.service.rule.PackingBusinessRules;
 import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 

@@ -1,4 +1,4 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.assignment;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -7,7 +7,6 @@ import java.util.List;
 
 import com.github.skjolber.packing.api.ContainerItem;
 import com.github.skjolber.packing.api.PackagerResult;
-import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentSolver;
 import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 /**
@@ -15,14 +14,14 @@ import com.github.skjolber.packing.service.service.rule.PlacementSupport;
  * The actual 3D validation remains supplied by the caller so candidate ordering
  * and container packing can evolve independently.
  */
-final class WholeOrderCandidateSearch {
+public final class WholeOrderCandidateSearch {
 
 	@FunctionalInterface
-	interface Validator {
+	public interface Validator {
 		PackagerResult validate(WholeOrderAssignmentSolver.Candidate candidate, int attempt);
 	}
 
-	record Result(PackagerResult result, int attempted) {
+	public record Result(PackagerResult result, int attempted) {
 	}
 
 	private final WholeOrderCandidateSelector selector;
@@ -30,7 +29,7 @@ final class WholeOrderCandidateSearch {
 	private final boolean probeEnabled;
 	private final int probeWindow;
 
-	WholeOrderCandidateSearch(PlacementSupport.Policy supportPolicy,
+	public WholeOrderCandidateSearch(PlacementSupport.Policy supportPolicy,
 			boolean probeEnabled, int probeWindow, int probeStates) {
 		this.selector = new WholeOrderCandidateSelector();
 		this.probeRanker = new WholeOrderCandidateProbeRanker(supportPolicy, probeStates);
@@ -38,7 +37,7 @@ final class WholeOrderCandidateSearch {
 		this.probeWindow = probeWindow;
 	}
 
-	Result search(List<WholeOrderAssignmentSolver.Candidate> candidates,
+	public Result search(List<WholeOrderAssignmentSolver.Candidate> candidates,
 			List<ContainerItem> physicalContainers, WholeOrderPackingCache cache,
 			long searchId, long deadline, Validator validator) {
 		if (probeEnabled) {

@@ -1,6 +1,7 @@
 package com.github.skjolber.packing.service.service;
 
 import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentStrategy;
+import com.github.skjolber.packing.service.service.engine.PackingEngine;
 import com.github.skjolber.packing.service.service.rule.PlacementSupport;
 
 import com.github.skjolber.packing.service.service.mapping.PackingMapper;

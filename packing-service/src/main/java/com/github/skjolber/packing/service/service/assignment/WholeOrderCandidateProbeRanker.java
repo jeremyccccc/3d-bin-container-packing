@@ -1,4 +1,4 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.assignment;
 
 import java.util.ArrayList;
 import java.util.Comparator;

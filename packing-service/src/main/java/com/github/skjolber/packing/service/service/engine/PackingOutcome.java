@@ -1,8 +1,9 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.engine;
 
 import com.github.skjolber.packing.api.PackagerResult;
+import com.github.skjolber.packing.service.service.PackingPlan;
 
-record PackingOutcome(
+public record PackingOutcome(
 		PackingPlan plan,
 		PackagerResult result,
 		boolean targetAchieved,

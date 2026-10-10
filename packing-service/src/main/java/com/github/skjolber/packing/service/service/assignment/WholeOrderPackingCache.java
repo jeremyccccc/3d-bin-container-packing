@@ -1,4 +1,4 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.assignment;
 
 import com.github.skjolber.packing.service.service.mapping.PackingMapper;
 
@@ -16,7 +16,7 @@ import com.github.skjolber.packing.api.PackagerResult;
 import com.github.skjolber.packing.api.Placement;
 
 /** Request-scoped cache for complete one-container packing attempts. */
-final class WholeOrderPackingCache {
+public final class WholeOrderPackingCache {
 
 	private final Map<Key, Entry> entries = new HashMap<>();
 	private int hits;
@@ -25,7 +25,7 @@ final class WholeOrderPackingCache {
 	private int failureHits;
 	private long savedMillis;
 
-	synchronized Lookup lookup(Container target, List<BoxItem> items) {
+	public synchronized Lookup lookup(Container target, List<BoxItem> items) {
 		Entry entry = entries.get(key(target, items));
 		if (entry == null) {
 			misses++;
@@ -41,17 +41,17 @@ final class WholeOrderPackingCache {
 		return Lookup.success(rebind(entry.result(), target.getId()), entry.computationMillis());
 	}
 
-	synchronized void putSuccess(Container container, List<BoxItem> items, PackagerResult result, long computationMillis) {
+	public synchronized void putSuccess(Container container, List<BoxItem> items, PackagerResult result, long computationMillis) {
 		entries.putIfAbsent(key(container, items), new Entry(result, computationMillis));
 	}
 
-	synchronized void putFailure(Container container, List<BoxItem> items, long computationMillis, boolean completed) {
+	public synchronized void putFailure(Container container, List<BoxItem> items, long computationMillis, boolean completed) {
 		if (completed) {
 			entries.putIfAbsent(key(container, items), new Entry(null, computationMillis));
 		}
 	}
 
-	synchronized Stats stats() {
+	public synchronized Stats stats() {
 		return new Stats(hits, misses, successHits, failureHits, entries.size(), savedMillis);
 	}
 
@@ -112,7 +112,7 @@ final class WholeOrderPackingCache {
 		return new PackagerResult(List.of(result), cached.getDuration(), false);
 	}
 
-	record Lookup(boolean hit, boolean failed, PackagerResult result, long savedMillis) {
+	public record Lookup(boolean hit, boolean failed, PackagerResult result, long savedMillis) {
 		private static Lookup miss() {
 			return new Lookup(false, false, null, 0L);
 		}
@@ -126,7 +126,7 @@ final class WholeOrderPackingCache {
 		}
 	}
 
-	record Stats(int hits, int misses, int successHits, int failureHits, int size, long savedMillis) {
+	public record Stats(int hits, int misses, int successHits, int failureHits, int size, long savedMillis) {
 	}
 
 	enum Status {

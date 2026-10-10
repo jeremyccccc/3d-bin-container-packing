@@ -1,4 +1,4 @@
-package com.github.skjolber.packing.service.service;
+package com.github.skjolber.packing.service.service.engine;
 
 import com.github.skjolber.packing.service.service.assignment.WholeOrderAssignmentStrategy;
 
