@@ -3,492 +3,132 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width,initial-scale=1">
-	<title>Packing 3D Viewer</title>
+	<title>装箱结果</title>
 	<style>
 		:root {
-			--surface: #ffffff;
-			--canvas: #f6f7f9;
-			--border: #e2e6eb;
-			--border-strong: #cbd2da;
-			--text: #25313d;
-			--muted: #74808c;
-			--soft: #f2f4f6;
-			--accent: #526b7a;
-			--accent-soft: #e9eef1;
-			--selected: #c58b45;
-			--sidebar-width: 304px;
-			--detail-width: 340px;
+			--topbar-height: 56px;
+			--sidebar-width: 240px;
+			--info-height: 0px;
+			--footer-height: 0px;
+			--surface: #fff;
+			--canvas: #f5f6f7;
+			--border: #d9dde3;
+			--border-light: #e8eaed;
+			--text: #1f2329;
+			--muted: #646a73;
+			--subtle: #8f959e;
+			--accent: #1769e0;
+			--accent-soft: #eaf2ff;
+			--success: #2e7d32;
 		}
 		* { box-sizing: border-box; }
-		html, body { width: 100%; height: 100%; margin: 0; background: var(--canvas); color: var(--text); font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; overflow: hidden; }
+		html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; color: var(--text); background: var(--canvas); font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; font-size: 13px; }
 		button { font: inherit; }
-		#viewer { width: 100vw; height: 100vh; display: block; cursor: grab; }
-		#viewer.dragging { cursor: grabbing; }
-		.panel { position: fixed; z-index: 5; inset: 0 auto 0 0; width: var(--sidebar-width); overflow: auto; padding: 24px 20px 20px; background: var(--surface); border-right: 1px solid var(--border); box-shadow: 8px 0 30px rgba(37,49,61,0.035); }
-		.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
-		.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-size: 17px; }
-		.brand-name { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
-		.title { margin: 0; color: var(--text); font-size: 18px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
-		.meta { color: var(--muted); font-size: 12px; line-height: 1.6; }
-		.error { color: #a65757; }
-		.summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
-		.summary-item { padding: 10px 11px; background: var(--soft); border: 1px solid #edf0f2; border-radius: 9px; }
-		.summary-value { display: block; color: var(--text); font-size: 16px; font-weight: 650; }
-		.summary-label { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
-		.badge { display: inline-flex; align-items: center; gap: 5px; margin: 6px 4px 0 0; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: #5d6873; font-size: 10px; }
-		.badge::before { width: 7px; height: 7px; border-radius: 2px; background: var(--badge-color); content: ""; }
-		.section-title { margin: 24px 0 9px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-		.container-list { display: grid; gap: 8px; }
-		.container-button { width: 100%; padding: 11px 12px; color: var(--text); background: #fff; border: 1px solid var(--border); border-radius: 9px; text-align: left; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
-		.container-button:hover { background: #fafbfc; border-color: var(--border-strong); }
-		.container-button.active { background: var(--accent-soft); border-color: #aebdc6; box-shadow: inset 3px 0 0 var(--accent); }
-		.container-name { display: block; font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
-		.container-stats { display: flex; justify-content: space-between; margin-top: 5px; color: var(--muted); font-size: 10px; }
-		.selection { margin-top: 10px; padding: 9px 10px; border-radius: 8px; background: var(--soft); }
-		.legend { max-height: 128px; overflow: auto; padding-bottom: 2px; }
-		.help { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 11px; }
-		.toolbar { position: fixed; z-index: 4; top: 18px; left: calc(var(--sidebar-width) + 18px); display: flex; gap: 8px; }
-		.tool-button { height: 34px; padding: 0 12px; color: #56636e; background: rgba(255,255,255,.94); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 5px 18px rgba(37,49,61,.06); cursor: pointer; }
-		.tool-button:hover { background: #fff; border-color: var(--border-strong); }
-		.detail-panel { position: fixed; z-index: 6; inset: 0 0 0 auto; width: var(--detail-width); max-width: calc(100vw - var(--sidebar-width)); overflow: auto; padding: 24px 22px; background: var(--surface); border-left: 1px solid var(--border); box-shadow: -8px 0 30px rgba(37,49,61,.04); }
+		.topbar { position: fixed; z-index: 10; inset: 0 0 auto 0; height: var(--topbar-height); display: flex; align-items: center; gap: 18px; padding: 0 20px; background: #eaf4ff; border-bottom: 1px solid #bfd7ef; }
+		.page-title { display: flex; align-items: center; gap: 8px; padding-right: 18px; color: #245f96; border-right: 1px solid #bfd7ef; font-size: 17px; font-weight: 700; white-space: nowrap; }
+		.brand-mark { width: 34px; height: 34px; display: block; object-fit: contain; }
+		.master-title { font-size: 14px; font-weight: 650; white-space: nowrap; }
+		.status-chip { padding: 2px 7px; color: var(--success); background: #eef7ef; border: 1px solid #cfe5d1; border-radius: 3px; font-size: 11px; white-space: nowrap; }
+		.overall-summary { display: flex; gap: 16px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+		.overall-summary strong { margin-right: 3px; color: var(--text); font-weight: 650; }
+		.result-id { min-width: 0; margin-left: auto; color: var(--subtle); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.error { color: #b42318; }
+		.panel { position: fixed; z-index: 6; top: var(--topbar-height); bottom: var(--footer-height); left: 0; width: var(--sidebar-width); overflow: auto; padding: 14px 12px 20px; background: #f7f9fc; border-right: 1px solid #dce3ec; scrollbar-width: thin; scrollbar-color: #c8d1dc transparent; }
+		.list-section + .list-section { margin-top: 22px; }
+		.section-header { min-height: 27px; display: flex; align-items: center; justify-content: space-between; padding: 0 4px 7px; }
+		.section-title { margin: 0; color: #364152; font-size: 12px; font-weight: 700; letter-spacing: .02em; }
+		.section-count { min-width: 21px; height: 19px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; color: #687386; background: #e9eef5; border-radius: 10px; font-size: 10px; font-weight: 650; }
+		.container-list { display: grid; gap: 7px; }
+		.container-button { position: relative; width: 100%; min-height: 58px; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; column-gap: 10px; padding: 8px 10px; color: var(--text); background: rgba(255,255,255,.9); border: 1px solid #e0e6ed; border-radius: 8px; box-shadow: 0 1px 2px rgba(31,42,55,.035); text-align: left; cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, background .16s ease, transform .16s ease; }
+		.container-button:hover { background: #fff; border-color: #b9c8da; box-shadow: 0 4px 12px rgba(42,62,84,.08); transform: translateY(-1px); }
+		.container-button.active { color: #165da8; background: #f2f7fd; border-color: #8eb9e6; box-shadow: 0 0 0 2px rgba(41,116,190,.09); }
+		.container-index { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; color: #64748b; background: #eef2f6; border-radius: 7px; font-size: 10px; font-weight: 750; }
+		.container-button.active .container-index { color: #fff; background: #397fbe; }
+		.container-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+		.container-name { min-width: 0; font-size: 12px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.container-type { color: var(--subtle); font-size: 10px; font-weight: 500; }
+		.container-button.active .container-type { color: #5d7fa2; }
+		.legend { display: grid; grid-template-columns: 1fr; gap: 5px; }
+		.badge { position: relative; min-width: 0; min-height: 62px; display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 9px 11px; color: #4b5563; background: rgba(255,255,255,.76); border: 1px solid transparent; border-radius: 9px; text-align: left; cursor: pointer; overflow: hidden; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s ease; }
+		.badge::before { width: 11px; height: 11px; background: var(--badge-color); border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(31,35,41,.13); content: ""; }
+		.badge:hover { color: #253347; background: #fff; border-color: #d5dee8; box-shadow: 0 5px 14px rgba(42,62,84,.07); transform: translateY(-1px); }
+		.badge.active { color: #155a9b; background: #fff; border-color: #9bc1e6; box-shadow: 0 0 0 2px rgba(41,116,190,.07); }
+		.badge-copy { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+		.badge-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #202936; font-size: 11px; font-weight: 700; }
+		.badge-summary { color: #98a1ad; font-size: 10px; font-weight: 500; white-space: nowrap; }
+		.badge-count { color: #111827; font-size: 12px; font-weight: 750; white-space: nowrap; }
+		.badge.active .badge-label { color: #155a9b; }
+		.canvas-info { position: fixed; z-index: 7; top: calc(var(--topbar-height) + 14px); right: 16px; width: 430px; height: auto; color: #202936; background: rgba(255,255,255,.94); border: 1px solid rgba(218,225,233,.92); border-radius: 8px; box-shadow: 0 7px 22px rgba(36,50,66,.12); backdrop-filter: blur(8px); pointer-events: none; }
+		.canvas-info-grid { padding: 13px 15px 14px; }
+		.stats-header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid #edf0f3; }
+		.stats-title { color: #3b4654; font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+		.stats-container-type { padding: 2px 7px; color: #5d6c7d; background: #f0f3f6; border-radius: 10px; font-size: 9px; font-weight: 650; }
+		.stats-content { display: flex; align-items: center; gap: 14px; padding-top: 12px; }
+		.stats-summary { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+		.stats-item { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 2px 9px; text-align: center; }
+		.stats-item + .stats-item { border-left: 1px solid #edf0f3; }
+		.stats-main { min-width: 0; display: flex; align-items: baseline; justify-content: center; gap: 2px; white-space: nowrap; }
+		.stats-value { min-width: 0; color: #111827; font-size: 16px; font-weight: 760; line-height: 1; overflow: hidden; text-overflow: ellipsis; }
+		.stats-unit { color: #8a94a2; font-size: 9px; font-weight: 600; }
+		.stats-label { color: #7e8997; font-size: 9px; white-space: nowrap; }
+		.utilization-block { flex: 0 0 64px; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+		.utilization-ring { position: relative; width: 50px; height: 50px; display: grid; place-items: center; border-radius: 50%; }
+		.utilization-ring::after { position: absolute; inset: 5px; background: rgba(255,255,255,.98); border-radius: 50%; content: ""; }
+		.utilization-ring-value { position: relative; z-index: 1; color: #17202c; font-size: 11px; font-weight: 760; }
+		#viewer { position: fixed; inset: calc(var(--topbar-height) + var(--info-height)) 0 var(--footer-height) var(--sidebar-width); width: calc(100vw - var(--sidebar-width)); height: calc(100vh - var(--topbar-height) - var(--info-height) - var(--footer-height)); display: block; cursor: grab; outline: none; }
+		#viewer:active { cursor: grabbing; }
+		#viewer.cargo-hover { cursor: pointer; }
+		.hover-tooltip { position: fixed; z-index: 12; max-width: 250px; padding: 7px 9px; color: #fff; background: rgba(31,35,41,.9); border-radius: 3px; box-shadow: 0 3px 10px rgba(31,35,41,.14); font-size: 11px; line-height: 1.45; pointer-events: none; transform: translate(12px, 12px); white-space: nowrap; }
+		.hover-tooltip[hidden] { display: none; }
+		.hover-tooltip strong { display: block; font-size: 12px; font-weight: 600; }
+		.hover-tooltip span { color: rgba(255,255,255,.72); }
+		.detail-panel { position: fixed; z-index: 4; width: 248px; max-width: calc(100vw - 20px); max-height: min(460px, calc(100vh - 40px)); overflow: auto; padding: 10px 12px 12px; background: rgba(255,255,255,.6); border: 1px solid rgba(207,213,220,.88); border-top: 3px solid var(--detail-color, var(--accent)); border-radius: 5px; box-shadow: 0 8px 22px rgba(31,35,41,.13), 0 2px 6px rgba(31,35,41,.06); backdrop-filter: blur(6px); }
 		.detail-panel[hidden] { display: none; }
-		.detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
-		.detail-title { color: var(--text); font-size: 16px; font-weight: 650; }
-		.detail-close { width: 30px; height: 30px; padding: 0; color: var(--muted); background: var(--soft); border: 0; border-radius: 7px; cursor: pointer; }
-		.detail-close:hover { color: var(--text); background: #e8ebee; }
-		.detail-grid { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 11px 12px; font-size: 12px; line-height: 1.55; }
+		.detail-grid { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 6px 10px; font-size: 11px; line-height: 1.45; }
 		.detail-label { color: var(--muted); }
 		.detail-value { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
-		.empty-hint { position: fixed; z-index: 2; right: 22px; bottom: 18px; color: #8b949e; font-size: 11px; pointer-events: none; }
 		@media (max-width: 760px) {
-			:root { --sidebar-width: 100vw; }
-			.panel { inset: 0 0 auto 0; width: 100%; max-height: 42vh; padding: 16px; border-right: 0; border-bottom: 1px solid var(--border); }
-			.brand { margin-bottom: 12px; }
-			.summary { margin-top: 10px; }
-			.section-title { margin-top: 14px; }
-			.toolbar { top: calc(42vh + 12px); left: 12px; }
-			.detail-panel { inset: auto 0 0 0; width: 100%; max-width: none; max-height: 48vh; padding: 18px; border-top: 1px solid var(--border); border-left: 0; }
-			.empty-hint { display: none; }
+			:root { --topbar-height: 82px; --sidebar-width: 100vw; --info-height: 0px; }
+			.topbar { flex-wrap: wrap; align-content: center; gap: 5px 12px; padding: 8px 12px; }
+			.page-title { width: 100%; padding: 0; border: 0; font-size: 15px; }
+			.result-id { width: 100%; margin: 0; }
+			.panel { top: var(--topbar-height); bottom: auto; width: 100%; max-height: 32vh; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
+			.canvas-info { top: calc(var(--topbar-height) + 32vh + 8px); right: 8px; left: 8px; width: auto; }
+			#viewer { inset: calc(var(--topbar-height) + 32vh + var(--info-height)) 0 var(--footer-height) 0; width: 100vw; height: calc(100vh - var(--topbar-height) - 32vh - var(--info-height) - var(--footer-height)); }
+			.detail-panel { width: min(248px, calc(100vw - 20px)); max-height: 46vh; }
 		}
 	</style>
+	<script type="importmap">{"imports":{"three":"/webjars/three/0.181.1/build/three.module.min.js","three/addons/":"/webjars/three/0.181.1/examples/jsm/"}}</script>
 </head>
 <body>
+	<header class="topbar">
+		<div class="page-title"><img class="brand-mark" src="/packing-viewer-page/pstar-logo.png?v=2" alt="Pstar">Pstar</div>
+		<div id="masterTitle" class="master-title">主单：—</div>
+		<div id="resultState" class="status-chip">装箱完成</div>
+		<div class="overall-summary">
+			<span><strong id="overallContainerCount">—</strong>个货柜</span>
+			<span><strong id="overallPieceCount">—</strong>件货物</span>
+		</div>
+		<div id="status" class="result-id">加载中...</div>
+	</header>
+	<aside class="panel">
+		<section class="list-section">
+			<div class="section-header"><h2 class="section-title">货柜列表</h2><span id="containerListCount" class="section-count">0</span></div>
+			<div id="containerList" class="container-list"></div>
+		</section>
+		<section class="list-section">
+			<div class="section-header"><h2 class="section-title">分单列表</h2><span id="houseListCount" class="section-count">0</span></div>
+			<div id="legend" class="legend"></div>
+		</section>
+	</aside>
+	<section id="containerInfo" class="canvas-info" hidden>
+		<div id="containerInfoBody" class="canvas-info-grid"></div>
+	</section>
 	<canvas id="viewer"></canvas>
-	<div class="panel">
-		<div class="brand">
-			<div class="brand-mark">▦</div>
-			<div class="brand-name">Packing Viewer</div>
-		</div>
-		<h1 id="masterTitle" class="title">装箱结果</h1>
-		<div id="status" class="meta">加载中...</div>
-		<div class="summary">
-			<div class="summary-item"><span id="containerCount" class="summary-value">—</span><span class="summary-label">柜子数量</span></div>
-			<div class="summary-item"><span id="pieceCount" class="summary-value">—</span><span class="summary-label">货物件数</span></div>
-		</div>
-		<div class="section-title">选择柜子</div>
-		<div id="containerList" class="container-list"></div>
-		<div id="selection" class="meta selection"></div>
-		<div class="section-title">分单标识</div>
-		<div id="legend" class="legend"></div>
-		<div class="meta help">左键单击：查看货物详情<br>左键拖动：旋转视角<br>右键拖动：平移柜子<br>滚轮：缩放</div>
-	</div>
-	<div class="toolbar">
-		<button id="resetView" class="tool-button" type="button">重置视角</button>
-	</div>
-	<div class="empty-hint">选择货物可查看详细信息</div>
-	<div id="detailPanel" class="detail-panel" hidden>
-		<div class="detail-header">
-			<div class="detail-title">货物详情</div>
-			<button id="detailClose" class="detail-close" type="button" title="关闭">×</button>
-		</div>
+	<div id="hoverTooltip" class="hover-tooltip" hidden></div>
+	<aside id="detailPanel" class="detail-panel" hidden>
 		<div id="detailBody" class="detail-grid"></div>
-	</div>
-	<script>
-		const canvas = document.getElementById("viewer");
-		const ctx = canvas.getContext("2d");
-		const masterTitleEl = document.getElementById("masterTitle");
-		const statusEl = document.getElementById("status");
-		const containerCountEl = document.getElementById("containerCount");
-		const pieceCountEl = document.getElementById("pieceCount");
-		const containerListEl = document.getElementById("containerList");
-		const selectionEl = document.getElementById("selection");
-		const legendEl = document.getElementById("legend");
-		const detailPanelEl = document.getElementById("detailPanel");
-		const detailBodyEl = document.getElementById("detailBody");
-		const detailCloseEl = document.getElementById("detailClose");
-		const resetViewEl = document.getElementById("resetView");
-		const state = {
-			yaw: -0.72, pitch: 0.54, zoom: 1, panX: 0, panY: 0,
-			dragMode: null, lastX: 0, lastY: 0, downX: 0, downY: 0, moved: false,
-			selectedIndex: 0, selectedPlacement: null, renderedFaces: [], data: null
-		};
-
-		function resultIdFromPath() {
-			const match = window.location.pathname.match(/\/packing-viewer\/([^/?#]+)/);
-			return match ? decodeURIComponent(match[1]) : "";
-		}
-
-		function colorFor(text) {
-			let hash = 0;
-			for (let i = 0; i < text.length; i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-			const palette = [
-				"#8fa6b2", "#a9a38f", "#91a99a", "#a697aa", "#b09a92", "#879bab",
-				"#a5ad91", "#9d94a8", "#87a9a8", "#b0a28d", "#929eae", "#a59098"
-			];
-			return palette[Math.abs(hash) % palette.length];
-		}
-
-		function layoutMetrics() {
-			const mobile = window.innerWidth <= 760;
-			const left = mobile ? 0 : 304;
-			const right = !mobile && !detailPanelEl.hidden ? 340 : 0;
-			const top = mobile ? window.innerHeight * 0.42 : 0;
-			return {
-				left, right, top,
-				width: Math.max(240, window.innerWidth - left - right),
-				height: Math.max(220, window.innerHeight - top),
-				centerX: left + Math.max(240, window.innerWidth - left - right) / 2,
-				centerY: top + Math.max(220, window.innerHeight - top) / 2
-			};
-		}
-
-		function resize() {
-			const dpr = window.devicePixelRatio || 1;
-			canvas.width = Math.floor(window.innerWidth * dpr);
-			canvas.height = Math.floor(window.innerHeight * dpr);
-			canvas.style.width = window.innerWidth + "px";
-			canvas.style.height = window.innerHeight + "px";
-			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-			draw();
-		}
-
-		function rotate(point) {
-			const cy = Math.cos(state.yaw), sy = Math.sin(state.yaw);
-			const cp = Math.cos(state.pitch), sp = Math.sin(state.pitch);
-			const x1 = point.x * cy - point.z * sy;
-			const z1 = point.x * sy + point.z * cy;
-			const y1 = point.y * cp - z1 * sp;
-			const z2 = point.y * sp + z1 * cp;
-			return { x: x1, y: y1, z: z2 };
-		}
-
-		function project(point, bounds) {
-			const centered = {
-				x: point.y - bounds.cy,
-				y: point.z - bounds.cz,
-				z: point.x - bounds.cx
-			};
-			const rotated = rotate(centered);
-			const scale = bounds.scale * state.zoom;
-			const layout = layoutMetrics();
-			return {
-				x: layout.centerX + state.panX + rotated.x * scale,
-				y: layout.centerY + state.panY - rotated.y * scale,
-				z: rotated.z
-			};
-		}
-
-		function cuboidFaces(x, y, z, dx, dy, dz, bounds) {
-			const p = [
-				project({x, y, z}, bounds),
-				project({x: x + dx, y, z}, bounds),
-				project({x: x + dx, y: y + dy, z}, bounds),
-				project({x, y: y + dy, z}, bounds),
-				project({x, y, z: z + dz}, bounds),
-				project({x: x + dx, y, z: z + dz}, bounds),
-				project({x: x + dx, y: y + dy, z: z + dz}, bounds),
-				project({x, y: y + dy, z: z + dz}, bounds)
-			];
-			return [
-				[p[0], p[1], p[2], p[3]],
-				[p[4], p[7], p[6], p[5]],
-				[p[0], p[4], p[5], p[1]],
-				[p[1], p[5], p[6], p[2]],
-				[p[2], p[6], p[7], p[3]],
-				[p[3], p[7], p[4], p[0]]
-			];
-		}
-
-		function faceDepth(face) {
-			return face.reduce((sum, point) => sum + point.z, 0) / face.length;
-		}
-
-		function drawFace(face, fill, stroke, alpha, lineWidth = 0.8, strokeAlpha = 0.42) {
-			ctx.beginPath();
-			ctx.moveTo(face[0].x, face[0].y);
-			for (let i = 1; i < face.length; i++) ctx.lineTo(face[i].x, face[i].y);
-			ctx.closePath();
-			ctx.globalAlpha = alpha;
-			ctx.fillStyle = fill;
-			ctx.fill();
-			ctx.globalAlpha = strokeAlpha;
-			ctx.strokeStyle = stroke;
-			ctx.lineWidth = lineWidth;
-			ctx.stroke();
-			ctx.globalAlpha = 1;
-		}
-
-		function boundsFor(container) {
-			const maxX = container.dx;
-			const maxY = container.dy;
-			const maxZ = container.dz;
-			const maxDim = Math.max(maxX, maxY, maxZ, 1);
-			const layout = layoutMetrics();
-			return {
-				cx: maxX / 2,
-				cy: maxY / 2,
-				cz: maxZ / 2,
-				scale: Math.min(layout.width, layout.height) / maxDim * 0.82
-			};
-		}
-
-		function draw() {
-			ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-			ctx.fillStyle = "#f6f7f9";
-			ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
-			state.renderedFaces = [];
-			if (!state.data) return;
-
-			const container = (state.data.containers || [])[state.selectedIndex];
-			if (!container) return;
-			const bounds = boundsFor(container);
-			const faces = [];
-			for (const face of cuboidFaces(0, 0, 0, container.dx, container.dy, container.dz, bounds)) {
-				faces.push({ face, fill: "rgba(255,255,255,0.18)", stroke: "#8b98a4", alpha: 1, placement: null });
-			}
-			for (const placement of container.stack?.placements || []) {
-				const stackable = placement.stackable;
-				const house = placement.houseBsNo || placement.houseBsId || (stackable.name || "").split(" ")[0] || stackable.id || "cargo";
-				for (const face of cuboidFaces(placement.x, placement.y, placement.z, stackable.dx, stackable.dy, stackable.dz, bounds)) {
-					faces.push({ face, fill: colorFor(house), stroke: "#5f6972", alpha: 0.72, placement });
-				}
-			}
-			faces.sort((a, b) => faceDepth(a.face) - faceDepth(b.face));
-			for (const item of faces) {
-				const selected = item.placement && item.placement === state.selectedPlacement;
-				drawFace(item.face, selected ? "#c58b45" : item.fill, selected ? "#76522c" : item.stroke,
-					selected ? 0.9 : item.alpha, selected ? 2.2 : 0.75, selected ? 1 : 0.38);
-			}
-			state.renderedFaces = faces;
-		}
-
-		function pointInFace(x, y, face) {
-			let inside = false;
-			for (let i = 0, j = face.length - 1; i < face.length; j = i++) {
-				const a = face[i], b = face[j];
-				const crosses = ((a.y > y) !== (b.y > y))
-					&& (x < (b.x - a.x) * (y - a.y) / ((b.y - a.y) || Number.EPSILON) + a.x);
-				if (crosses) inside = !inside;
-			}
-			return inside;
-		}
-
-		function formatCm(value) {
-			return Number.isFinite(Number(value)) ? `${Number((Number(value) / 10).toFixed(1))} cm` : "-";
-		}
-
-		function addDetailRow(label, value) {
-			const labelEl = document.createElement("div");
-			labelEl.className = "detail-label";
-			labelEl.textContent = label;
-			const valueEl = document.createElement("div");
-			valueEl.className = "detail-value";
-			valueEl.textContent = value ?? "-";
-			detailBodyEl.append(labelEl, valueEl);
-		}
-
-		function ruleText(placement) {
-			const rules = [];
-			if (placement.heightPosition === 1) rules.push("置底");
-			if (placement.heightPosition === 2) rules.push("置顶");
-			if (placement.noPress) rules.push("勿压");
-			if (placement.doorSide) rules.push("靠门");
-			return rules.length ? rules.join("、") : "无";
-		}
-
-		function showPlacementDetails(placement) {
-			state.selectedPlacement = placement;
-			detailBodyEl.replaceChildren();
-			if (!placement) {
-				detailPanelEl.hidden = true;
-				draw();
-				return;
-			}
-			const container = (state.data?.containers || [])[state.selectedIndex];
-			const stackable = placement.stackable || {};
-			const original = [placement.originalDx, placement.originalDy, placement.originalDz];
-			const placed = [stackable.dx, stackable.dy, stackable.dz];
-			const rotated = original.every(Number.isFinite) && placed.every(Number.isFinite)
-				? original.some((value, index) => value !== placed[index]) : false;
-			addDetailRow("分单号", placement.houseBsNo || placement.houseBsId || "-");
-			addDetailRow("进仓号", placement.inboundNo || placement.inboundId || "-");
-			addDetailRow("品名", placement.description || "-");
-			addDetailRow("客户", placement.customer || "-");
-			addDetailRow("件序号", `第 ${placement.pieceIndex || 1} 件`);
-			addDetailRow("所属柜", container?.id || container?.name || "-");
-			addDetailRow("原始尺寸", `${formatCm(placement.originalDx)} × ${formatCm(placement.originalDy)} × ${formatCm(placement.originalDz)}`);
-			addDetailRow("摆放尺寸", `${formatCm(stackable.dx)} × ${formatCm(stackable.dy)} × ${formatCm(stackable.dz)}`);
-			addDetailRow("摆放坐标", `X ${formatCm(placement.x)} / Y ${formatCm(placement.y)} / Z ${formatCm(placement.z)}`);
-			addDetailRow("单件重量", Number.isFinite(placement.unitWeightKg) ? `${Number(placement.unitWeightKg.toFixed(3))} kg` : "-");
-			addDetailRow("单件体积", Number.isFinite(placement.unitVolumeM3) ? `${Number(placement.unitVolumeM3.toFixed(6))} m³` : "-");
-			addDetailRow("方向", rotated ? "已旋转" : "原始方向");
-			addDetailRow("装箱规则", ruleText(placement));
-			detailPanelEl.hidden = false;
-			draw();
-		}
-
-		function selectPlacementAt(clientX, clientY) {
-			const rect = canvas.getBoundingClientRect();
-			const x = clientX - rect.left;
-			const y = clientY - rect.top;
-			for (let i = state.renderedFaces.length - 1; i >= 0; i--) {
-				const item = state.renderedFaces[i];
-				if (item.placement && pointInFace(x, y, item.face)) {
-					showPlacementDetails(item.placement);
-					return;
-				}
-			}
-			showPlacementDetails(null);
-		}
-
-		function selectContainer(index) {
-			state.selectedIndex = index;
-			state.panX = 0;
-			state.panY = 0;
-			state.zoom = 1;
-			state.selectedPlacement = null;
-			detailPanelEl.hidden = true;
-			const containers = state.data?.containers || [];
-			const container = containers[index];
-			containerListEl.querySelectorAll("button").forEach((button, buttonIndex) => {
-				button.classList.toggle("active", buttonIndex === index);
-			});
-			if (!container) return;
-			const placements = container.stack?.placements || [];
-			const volume = placements.reduce((sum, placement) => {
-				const item = placement.stackable || {};
-				return sum + (Number(item.dx) || 0) * (Number(item.dy) || 0) * (Number(item.dz) || 0);
-			}, 0);
-			const capacity = Math.max(1, container.dx * container.dy * container.dz);
-			selectionEl.textContent = `当前 ${placements.length} 件 · 体积利用率 ${(volume / capacity * 100).toFixed(1)}%`;
-			const houses = new Set(placements.map(placement =>
-				placement.houseBsNo || placement.houseBsId || (placement.stackable?.name || "").split(" ")[0]).filter(Boolean));
-			legendEl.replaceChildren();
-			Array.from(houses).sort().forEach(house => {
-				const badge = document.createElement("span");
-				badge.className = "badge";
-				badge.style.setProperty("--badge-color", colorFor(house));
-				badge.textContent = house;
-				legendEl.appendChild(badge);
-			});
-			draw();
-		}
-
-		function renderContainerList(containers) {
-			containerListEl.replaceChildren();
-			containers.forEach((container, index) => {
-				const button = document.createElement("button");
-				button.type = "button";
-				button.className = "container-button";
-				const placements = container.stack?.placements || [];
-				const volume = placements.reduce((sum, placement) => {
-					const item = placement.stackable || {};
-					return sum + (Number(item.dx) || 0) * (Number(item.dy) || 0) * (Number(item.dz) || 0);
-				}, 0);
-				const capacity = Math.max(1, container.dx * container.dy * container.dz);
-				const name = document.createElement("span");
-				name.className = "container-name";
-				name.textContent = `${String(index + 1).padStart(2, "0")}  ${container.id || container.name || "未命名柜"}`;
-				const stats = document.createElement("span");
-				stats.className = "container-stats";
-				const pieces = document.createElement("span");
-				pieces.textContent = `${placements.length} 件`;
-				const fill = document.createElement("span");
-				fill.textContent = `${(volume / capacity * 100).toFixed(1)}%`;
-				stats.append(pieces, fill);
-				button.append(name, stats);
-				button.addEventListener("click", () => selectContainer(index));
-				containerListEl.appendChild(button);
-			});
-		}
-
-		async function load() {
-			const resultId = resultIdFromPath();
-			if (!resultId) {
-				statusEl.classList.add("error");
-				statusEl.textContent = "URL 缺少 resultId";
-				return;
-			}
-			const response = await fetch(`/api/packing/results/${encodeURIComponent(resultId)}/visualization`);
-			if (!response.ok) throw new Error(`HTTP ${response.status}`);
-			state.data = await response.json();
-			const containers = state.data.containers || [];
-			const placements = containers.reduce((sum, container) => sum + (container.stack?.placements?.length || 0), 0);
-			const masterNo = state.data.masterNo || state.data.masterBsId || "未提供主单号";
-			masterTitleEl.textContent = `主单：${masterNo}`;
-			statusEl.textContent = `结果编号 ${resultId}`;
-			containerCountEl.textContent = containers.length;
-			pieceCountEl.textContent = placements;
-			renderContainerList(containers);
-			selectContainer(0);
-		}
-
-		canvas.addEventListener("mousedown", event => {
-			if (event.button !== 0 && event.button !== 2) return;
-			state.dragMode = event.button === 2 ? "pan" : "rotate";
-			state.lastX = event.clientX;
-			state.lastY = event.clientY;
-			state.downX = event.clientX;
-			state.downY = event.clientY;
-			state.moved = false;
-			canvas.classList.add("dragging");
-			event.preventDefault();
-		});
-		canvas.addEventListener("contextmenu", event => event.preventDefault());
-		window.addEventListener("mouseup", event => {
-			const mode = state.dragMode;
-			const moved = state.moved;
-			state.dragMode = null;
-			canvas.classList.remove("dragging");
-			if (mode === "rotate" && !moved) selectPlacementAt(event.clientX, event.clientY);
-		});
-		window.addEventListener("mousemove", event => {
-			if (!state.dragMode) return;
-			if (Math.hypot(event.clientX - state.downX, event.clientY - state.downY) > 5) state.moved = true;
-			const deltaX = event.clientX - state.lastX;
-			const deltaY = event.clientY - state.lastY;
-			if (state.dragMode === "rotate") {
-				state.yaw += deltaX * 0.008;
-				state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch + deltaY * 0.008));
-			} else {
-				state.panX += deltaX;
-				state.panY += deltaY;
-			}
-			state.lastX = event.clientX;
-			state.lastY = event.clientY;
-			draw();
-		});
-		canvas.addEventListener("wheel", event => {
-			event.preventDefault();
-			state.zoom = Math.max(0.2, Math.min(5, state.zoom * (event.deltaY > 0 ? 0.9 : 1.1)));
-			draw();
-		}, { passive: false });
-		detailCloseEl.addEventListener("click", () => showPlacementDetails(null));
-		resetViewEl.addEventListener("click", () => {
-			state.yaw = -0.72;
-			state.pitch = 0.54;
-			state.zoom = 1;
-			state.panX = 0;
-			state.panY = 0;
-			draw();
-		});
-		window.addEventListener("resize", resize);
-
-		resize();
-		load().catch(error => {
-			statusEl.classList.add("error");
-			statusEl.textContent = `加载失败：${error.message}`;
-		});
-	</script>
+	</aside>
+	<script type="module" src="/packing-viewer-page/viewer-three.js?v=20261013-23"></script>
 </body>
 </html>
