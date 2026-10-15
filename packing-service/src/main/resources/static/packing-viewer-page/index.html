@@ -24,14 +24,13 @@
 		* { box-sizing: border-box; }
 		html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; color: var(--text); background: var(--canvas); font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; font-size: 13px; }
 		button { font: inherit; }
-		.topbar { position: fixed; z-index: 10; inset: 0 0 auto 0; height: var(--topbar-height); display: flex; align-items: center; gap: 18px; padding: 0 20px; background: #eaf4ff; border-bottom: 1px solid #bfd7ef; }
-		.page-title { display: flex; align-items: center; gap: 8px; padding-right: 18px; color: #245f96; border-right: 1px solid #bfd7ef; font-size: 17px; font-weight: 700; white-space: nowrap; }
+		.topbar { position: fixed; z-index: 10; inset: 0 0 auto 0; height: var(--topbar-height); display: flex; align-items: center; padding: 0 20px; background: #eaf4ff; border-bottom: 1px solid #bfd7ef; }
+		.page-title { height: 34px; display: flex; align-items: center; gap: 8px; color: #245f96; font-size: 17px; font-weight: 700; white-space: nowrap; }
 		.brand-mark { width: 34px; height: 34px; display: block; object-fit: contain; }
-		.master-title { font-size: 14px; font-weight: 650; white-space: nowrap; }
-		.status-chip { padding: 2px 7px; color: var(--success); background: #eef7ef; border: 1px solid #cfe5d1; border-radius: 3px; font-size: 11px; white-space: nowrap; }
-		.overall-summary { display: flex; gap: 16px; color: var(--muted); font-size: 12px; white-space: nowrap; }
-		.overall-summary strong { margin-right: 3px; color: var(--text); font-weight: 650; }
-		.result-id { min-width: 0; margin-left: auto; color: var(--subtle); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.header-context { min-width: 0; height: 26px; display: flex; align-items: center; margin-left: 18px; padding-left: 18px; border-left: 1px solid rgba(151,183,215,.7); white-space: nowrap; }
+		.header-master { max-width: min(42vw, 420px); overflow: hidden; color: #24364a; font-size: 12px; font-weight: 700; text-overflow: ellipsis; }
+		.header-master::before { margin-right: 5px; color: #8496a8; font-size: 10px; font-weight: 500; content: "主单"; }
+		.result-id { position: fixed; z-index: 7; right: 14px; bottom: 12px; max-width: calc(100vw - var(--sidebar-width) - 28px); color: #8a94a2; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 		.error { color: #b42318; }
 		.panel { position: fixed; z-index: 6; top: var(--topbar-height); bottom: var(--footer-height); left: 0; width: var(--sidebar-width); overflow: auto; padding: 14px 12px 20px; background: #f7f9fc; border-right: 1px solid #dce3ec; scrollbar-width: thin; scrollbar-color: #c8d1dc transparent; }
 		.list-section + .list-section { margin-top: 22px; }
@@ -88,10 +87,13 @@
 		.detail-label { color: var(--muted); }
 		.detail-value { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
 		@media (max-width: 760px) {
-			:root { --topbar-height: 82px; --sidebar-width: 100vw; --info-height: 0px; }
-			.topbar { flex-wrap: wrap; align-content: center; gap: 5px 12px; padding: 8px 12px; }
-			.page-title { width: 100%; padding: 0; border: 0; font-size: 15px; }
-			.result-id { width: 100%; margin: 0; }
+			:root { --topbar-height: 56px; --sidebar-width: 100vw; --info-height: 0px; }
+			.topbar { padding: 7px 12px; }
+			.page-title { height: 28px; font-size: 15px; }
+			.brand-mark { width: 28px; height: 28px; }
+			.header-context { flex: 1; margin-left: 12px; padding-left: 12px; }
+			.header-master { max-width: calc(100vw - 120px); }
+			.result-id { right: 8px; bottom: 8px; max-width: calc(100vw - 16px); }
 			.panel { top: var(--topbar-height); bottom: auto; width: 100%; max-height: 32vh; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
 			.canvas-info { top: calc(var(--topbar-height) + 32vh + 8px); right: 8px; left: 8px; width: auto; }
 			#viewer { inset: calc(var(--topbar-height) + 32vh + var(--info-height)) 0 var(--footer-height) 0; width: 100vw; height: calc(100vh - var(--topbar-height) - 32vh - var(--info-height) - var(--footer-height)); }
@@ -103,14 +105,11 @@
 <body>
 	<header class="topbar">
 		<div class="page-title"><img class="brand-mark" src="/packing-viewer-page/pstar-logo.png?v=2" alt="Pstar">Pstar</div>
-		<div id="masterTitle" class="master-title">主单：—</div>
-		<div id="resultState" class="status-chip">装箱完成</div>
-		<div class="overall-summary">
-			<span><strong id="overallContainerCount">—</strong>个货柜</span>
-			<span><strong id="overallPieceCount">—</strong>件货物</span>
+		<div class="header-context">
+			<strong id="masterTitle" class="header-master">—</strong>
 		</div>
-		<div id="status" class="result-id">加载中...</div>
 	</header>
+	<div id="status" class="result-id">加载中...</div>
 	<aside class="panel">
 		<section class="list-section">
 			<div class="section-header"><h2 class="section-title">货柜列表</h2><span id="containerListCount" class="section-count">0</span></div>
@@ -129,6 +128,6 @@
 	<aside id="detailPanel" class="detail-panel" hidden>
 		<div id="detailBody" class="detail-grid"></div>
 	</aside>
-	<script type="module" src="/packing-viewer-page/viewer-three.js?v=20261013-23"></script>
+	<script type="module" src="/packing-viewer-page/viewer-three.js?v=20261014-17"></script>
 </body>
 </html>

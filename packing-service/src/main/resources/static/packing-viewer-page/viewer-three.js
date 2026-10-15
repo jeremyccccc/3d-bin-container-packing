@@ -1,11 +1,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 
 const canvas = document.getElementById("viewer");
 const masterTitleEl = document.getElementById("masterTitle");
 const statusEl = document.getElementById("status");
-const overallContainerCountEl = document.getElementById("overallContainerCount");
-const overallPieceCountEl = document.getElementById("overallPieceCount");
 const containerListEl = document.getElementById("containerList");
 const legendEl = document.getElementById("legend");
 const containerListCountEl = document.getElementById("containerListCount");
@@ -130,14 +131,16 @@ function buildHouseColors(containers) {
 	for (const house of ordered) {
 		const hash = stableHash(house);
 		let index = hash % palette.length;
-		for (let probe = 0; probe < palette.length && !available.has(index); probe++) index = (index + 13) % palette.length;
+		for (let probe = 0; probe < palette.length && !available.has(index); probe++) {
+			index = (index + 13) % palette.length;
+		}
 		if (available.has(index)) {
 			available.delete(index);
 			state.houseColors.set(house, fallbackCargoColor(palette[index]));
 		} else {
 			const hue = Math.round((hash * 137.508) % 360);
-			const lightness = 48 + (hash % 3) * 7;
-			state.houseColors.set(house, fallbackCargoColor(`hsl(${hue}, 62%, ${lightness}%)`));
+			const lightness = 46 + (hash % 3) * 8;
+			state.houseColors.set(house, fallbackCargoColor(`hsl(${hue}, 72%, ${lightness}%)`));
 		}
 	}
 }
@@ -387,10 +390,17 @@ function buildContainer(container) {
 		state.root.add(mesh);
 		state.cargoMeshes.push(mesh);
 
-		const edgeGeometry = new THREE.BufferGeometry();
-		edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(edgePositions, 3));
-		const edgeMaterial = new THREE.LineBasicMaterial({ color:0x53616c, transparent:true, opacity:0.32, depthWrite:false });
-		const edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+		const edgeGeometry = new LineSegmentsGeometry();
+		edgeGeometry.setPositions(edgePositions);
+		const edgeMaterial = new LineMaterial({
+			color:0x46515b,
+			linewidth:1.2,
+			transparent:true,
+			opacity:0.58,
+			depthWrite:false,
+			alphaToCoverage:false
+		});
+		const edges = new LineSegments2(edgeGeometry, edgeMaterial);
 		edges.renderOrder = 2;
 		edges.userData.ignorePicking = true;
 		state.root.add(edges);
@@ -404,7 +414,7 @@ function fitCamera(dx, dy, dz, preserveDirection = false) {
 	const rect = canvas.getBoundingClientRect();
 	const aspect = Math.max(0.2, rect.width / Math.max(1, rect.height));
 	const fittedHeight = Math.max(dz * 2.4, dy * 2.1, dx / aspect * 1.28, 1);
-	state.frustumHeight = fittedHeight * 1.58;
+	state.frustumHeight = fittedHeight * 1.374;
 	const target = new THREE.Vector3(dx / 2, dz / 2, dy / 2);
 	const diagonal = Math.max(1, Math.hypot(dx, dy, dz));
 	const currentDirection = camera.position.clone().sub(controls.target);
@@ -446,8 +456,8 @@ function applyVisualState() {
 			group.mesh.setColorAt(index, color);
 		});
 		group.mesh.instanceColor.needsUpdate = true;
-		group.edges.material.opacity = state.selectedHouse ? (group.house === state.selectedHouse ? 0.7 : 0.08) : 0.32;
-		group.edges.material.color.set(state.selectedHouse === group.house ? 0x40515d : 0x53616c);
+		group.edges.material.opacity = state.selectedHouse ? (group.house === state.selectedHouse ? 0.86 : 0.13) : 0.58;
+		group.edges.material.color.set(0x46515b);
 	}
 	updateSelectionOutline();
 }
@@ -756,11 +766,8 @@ async function load() {
 	state.data = await response.json();
 	const containers = state.data.containers || [];
 	buildHouseColors(containers);
-	const pieceCount = containers.reduce((sum, container) => sum + (container.stack?.placements?.length || 0), 0);
-	masterTitleEl.textContent = `主单：${state.data.masterNo || state.data.masterBsId || "未提供主单号"}`;
+	masterTitleEl.textContent = state.data.masterNo || state.data.masterBsId || "未提供主单号";
 	statusEl.textContent = `结果编号 ${resultId}`;
-	overallContainerCountEl.textContent = containers.length;
-	overallPieceCountEl.textContent = pieceCount;
 	renderContainerList(containers);
 	selectContainer(0);
 }
